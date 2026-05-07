@@ -1,0 +1,18 @@
+# Environment
+.env
+*.log
+
+# Dependencies
+node_modules/
+package-lock.json
+
+# Backups
+*.bak
+*.backup
+*-backup-*
+
+# Docker
+volumes/
+
+# Outputs temporários
+/mnt/user-data/outputs/*
