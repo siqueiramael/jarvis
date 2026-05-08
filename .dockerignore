@@ -1,0 +1,12 @@
+node_modules
+.git
+.gitignore
+*.bak
+*.tar.gz
+whisper.cpp
+piper-tts
+data
+logs
+backups
+*.md
+!README.md

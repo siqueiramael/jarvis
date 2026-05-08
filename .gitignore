@@ -8,11 +8,22 @@ package-lock.json
 
 # Backups
 *.bak
+*.bak2
+*.bak3
 *.backup
 *-backup-*
 
 # Docker
 volumes/
 
+# Voice binaries (compilados localmente, não versionar)
+whisper.cpp/
+piper-tts/
+piper_linux_x86_64.tar.gz
+*.tar.gz
+
 # Outputs temporários
 /mnt/user-data/outputs/*
+
+# Logs
+logs/

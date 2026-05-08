@@ -17,6 +17,8 @@ services:
     volumes:
       - ./data/obsidian-vault:/app/data/obsidian-vault
       - ./logs:/app/logs
+      - ./whisper.cpp:/app/whisper.cpp
+      - ./piper-tts:/app/piper-tts
     networks:
       - jarvis-network
 
