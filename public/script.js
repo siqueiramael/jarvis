@@ -3391,3 +3391,156 @@ initRealtimeBtn();
   
   console.log('[AGENTS FRONTEND] ✅ Sistema inicializado!');
 })();
+
+// ═══════════════════════════════════════════
+// VOICE PIPELINE v2.0 - MediaRecorder → /api/voice/pipeline
+// ═══════════════════════════════════════════
+(function() {
+  const micBtnEl = document.getElementById('mic-btn');
+  const miniOutput = document.getElementById('chat-mini-output');
+
+  if (!micBtnEl) {
+    console.warn('[VOICE] mic-btn não encontrado');
+    return;
+  }
+
+  // Substituir handler antigo (clone remove todos listeners)
+  const newMicBtn = micBtnEl.cloneNode(true);
+  micBtnEl.parentNode.replaceChild(newMicBtn, micBtnEl);
+
+  let mediaRecorder = null;
+  let audioChunks = [];
+  let isRecording = false;
+  let currentStream = null;
+
+  function addVoiceLine(text, type) {
+    if (!miniOutput) {
+      console.log('[VOICE]', type, text);
+      return null;
+    }
+    const line = document.createElement('div');
+    line.className = 'chat-mini-line ' + (type || 'system');
+    line.textContent = text;
+    miniOutput.appendChild(line);
+    miniOutput.scrollTop = miniOutput.scrollHeight;
+    return line;
+  }
+
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      currentStream = stream;
+      audioChunks = [];
+
+      // Tentar opus (melhor compressão), fallback pra webm padrão
+      let mimeType = 'audio/webm;codecs=opus';
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = 'audio/webm';
+      }
+
+      mediaRecorder = new MediaRecorder(stream, { mimeType });
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = async () => {
+        // Parar tracks pra apagar indicador de gravação do navegador
+        if (currentStream) {
+          currentStream.getTracks().forEach(t => t.stop());
+          currentStream = null;
+        }
+
+        const blob = new Blob(audioChunks, { type: mimeType });
+        await sendToPipeline(blob);
+      };
+
+      mediaRecorder.start();
+      isRecording = true;
+      newMicBtn.classList.add('recording');
+      addVoiceLine('🎤 Gravando... (clique novamente para parar)', 'system');
+      console.log('[VOICE] Gravação iniciada');
+
+    } catch (err) {
+      console.error('[VOICE] Erro ao acessar microfone:', err);
+      addVoiceLine('❌ Erro ao acessar microfone: ' + err.message, 'error');
+      newMicBtn.classList.remove('recording');
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+      isRecording = false;
+      newMicBtn.classList.remove('recording');
+      addVoiceLine('⏳ Processando áudio...', 'system');
+      console.log('[VOICE] Gravação encerrada');
+    }
+  }
+
+  async function sendToPipeline(audioBlob) {
+    const t0 = Date.now();
+    try {
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'recording.webm');
+
+      console.log('[VOICE] Enviando', audioBlob.size, 'bytes ao pipeline...');
+
+      const response = await fetch('/api/voice/pipeline', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`HTTP ${response.status}: ${errText}`);
+      }
+
+      // Extrair metadados dos headers
+      const userText = decodeURIComponent(response.headers.get('X-User-Text') || '');
+      const replyText = decodeURIComponent(response.headers.get('X-Reply-Clean') || response.headers.get('X-Reply-Text') || '');
+      const tStt = response.headers.get('X-Timing-Stt');
+      const tChat = response.headers.get('X-Timing-Chat');
+      const tTts = response.headers.get('X-Timing-Tts');
+      const tTotal = response.headers.get('X-Timing-Total');
+
+      // Mostrar no chat
+      if (userText) addVoiceLine('🗣️  ' + userText, 'user');
+      if (replyText) addVoiceLine('🤖 ' + replyText, 'assistant');
+
+      console.log(`[VOICE] STT:${tStt}ms CHAT:${tChat}ms TTS:${tTts}ms TOTAL:${tTotal}ms`);
+
+      // Tocar áudio resposta
+      const audioBuffer = await response.arrayBuffer();
+      const ttsBlob = new Blob([audioBuffer], { type: 'audio/wav' });
+      const audioUrl = URL.createObjectURL(ttsBlob);
+      const audio = new Audio(audioUrl);
+
+      audio.onended = () => {
+        URL.revokeObjectURL(audioUrl);
+        console.log('[VOICE] Reprodução concluída');
+      };
+
+      audio.onerror = (e) => {
+        console.error('[VOICE] Erro ao tocar áudio:', e);
+        addVoiceLine('❌ Erro ao reproduzir resposta', 'error');
+      };
+
+      await audio.play();
+
+    } catch (err) {
+      console.error('[VOICE] Pipeline error:', err);
+      addVoiceLine('❌ Erro: ' + err.message, 'error');
+    }
+  }
+
+  newMicBtn.addEventListener('click', () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  });
+
+  console.log('[VOICE] ✅ Pipeline pronto (MediaRecorder → /api/voice/pipeline)');
+})();

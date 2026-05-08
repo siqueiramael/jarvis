@@ -262,14 +262,25 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     const tStt = Date.now();
     console.log(`[PIPELINE] STT processando: ${audioPath}`);
 
+    // Converter pra WAV 16kHz mono (formato canônico do Whisper)
+    const wavPath = `${audioPath}.wav`;
+    try {
+      await execAsync(`ffmpeg -y -i ${audioPath} -ar 16000 -ac 1 -c:a pcm_s16le ${wavPath} 2>&1`);
+    } catch (ffErr) {
+      console.error('[PIPELINE] ffmpeg falhou:', ffErr.message);
+      await unlink(audioPath).catch(() => {});
+      return res.status(400).json({ error: 'Audio conversion failed', details: ffErr.message });
+    }
+
     const { stdout: sttOut } = await execAsync(
-      `${WHISPER_PATH} -m ${WHISPER_MODEL} -f ${audioPath} --language pt --no-timestamps`
+      `${WHISPER_PATH} -m ${WHISPER_MODEL} -f ${wavPath} --language pt --no-timestamps`
     );
     const sttLines = sttOut.split('\n');
     const userText = (sttLines.find(l => l.trim() && !l.includes('[') && !l.includes('whisper_')) || '').trim();
     timings.stt = Date.now() - tStt;
 
     await unlink(audioPath).catch(() => {});
+    await unlink(wavPath).catch(() => {});
 
     if (!userText) {
       return res.status(400).json({ error: 'STT returned empty', timings });
