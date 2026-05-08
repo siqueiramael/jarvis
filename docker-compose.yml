@@ -19,6 +19,8 @@ services:
       - ./logs:/app/logs
       - ./whisper.cpp:/app/whisper.cpp
       - ./piper-tts:/app/piper-tts
+      - ./server.js:/app/server.js
+      - ./public:/app/public
     networks:
       - jarvis-network
 

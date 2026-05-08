@@ -223,6 +223,134 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
+
+// Limpa texto pra TTS: remove emojis, markdown, code blocks, limita tamanho
+function sanitizeForTTS(text, maxLen = 500) {
+  let t = text || '';
+  t = t.replace(/```[\s\S]*?```/g, ''); // code blocks
+  t = t.replace(/`[^`]*`/g, ''); // inline code
+  t = t.replace(/[*_~#>]/g, ''); // markdown chars
+  t = t.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'); // links
+  t = t.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ''); // emojis
+  t = t.replace(/<0x[0-9A-Fa-f]+>/g, ''); // bytes weird
+  t = t.replace(/\n+/g, '. ').replace(/\s+/g, ' ').trim();
+  if (t.length > maxLen) {
+    const cut = t.substring(0, maxLen);
+    const lastDot = cut.lastIndexOf('.');
+    t = lastDot > maxLen * 0.6 ? cut.substring(0, lastDot + 1) : cut + '...';
+  }
+  return t;
+}
+
+// ============================================
+// VOICE PIPELINE: STT → CHAT → TTS (tudo em um)
+// ============================================
+app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
+  const t0 = Date.now();
+  const timings = {};
+
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No audio file' });
+    }
+
+    const audioPath = req.file.path;
+    const useRAG = req.body.useRAG === 'true';
+    const searchQuery = req.body.searchQuery || '';
+
+    // ─── 1. STT ───
+    const tStt = Date.now();
+    console.log(`[PIPELINE] STT processando: ${audioPath}`);
+
+    const { stdout: sttOut } = await execAsync(
+      `${WHISPER_PATH} -m ${WHISPER_MODEL} -f ${audioPath} --language pt --no-timestamps`
+    );
+    const sttLines = sttOut.split('\n');
+    const userText = (sttLines.find(l => l.trim() && !l.includes('[') && !l.includes('whisper_')) || '').trim();
+    timings.stt = Date.now() - tStt;
+
+    await unlink(audioPath).catch(() => {});
+
+    if (!userText) {
+      return res.status(400).json({ error: 'STT returned empty', timings });
+    }
+    console.log(`[PIPELINE] STT (${timings.stt}ms): "${userText}"`);
+
+    // ─── 2. CHAT (LLM) ───
+    const tChat = Date.now();
+    const messages = [];
+
+    // Modo voz: prompt curto e conversacional (não usa system prompt do agente)
+    messages.push({
+      role: 'system',
+      content: 'Você é o JARVIS, assistente por voz em português brasileiro. Responda de forma curta, natural e conversacional. NÃO use markdown, emojis, código ou listas. Máximo 2-3 frases curtas.'
+    });
+
+    if (useRAG && searchQuery) {
+      try {
+        const results = await searchNotes(searchQuery);
+        if (results.length > 0) {
+          const context = results.slice(0, 3).map(r => `[${r.title}]: ${r.snippet}`).join('\n\n');
+          messages.push({ role: 'system', content: `Contexto do Obsidian Vault:\n\n${context}` });
+        }
+      } catch (e) {
+        console.error('[PIPELINE RAG]', e.message);
+      }
+    }
+
+    messages.push({ role: 'user', content: userText });
+
+    const llmResp = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.LM_STUDIO_MODEL,
+        messages,
+        temperature: 0.7,
+        max_tokens: 300
+      })
+    });
+
+    const llmData = await llmResp.json();
+    const replyText = llmData.choices?.[0]?.message?.content || 'Erro ao gerar resposta.';
+    timings.chat = Date.now() - tChat;
+    console.log(`[PIPELINE] CHAT (${timings.chat}ms): "${replyText.substring(0, 80)}..."`);
+
+    // ─── 3. TTS ───
+    const tTts = Date.now();
+    const ttsPath = `/tmp/pipeline-${Date.now()}.wav`;
+    const replyClean = sanitizeForTTS(replyText, 500);
+    const ttsTextEscaped = replyClean.replace(/"/g, '\\"');
+
+    await execAsync(
+      `echo "${ttsTextEscaped}" | ${PIPER_PATH} --model ${PIPER_MODEL} --output_file ${ttsPath}`
+    );
+    timings.tts = Date.now() - tTts;
+    timings.total = Date.now() - t0;
+    console.log(`[PIPELINE] TTS (${timings.tts}ms) — TOTAL ${timings.total}ms`);
+
+    // Enviar metadados nos headers + WAV no body
+    res.setHeader('Content-Type', 'audio/wav');
+    res.setHeader('X-User-Text', encodeURIComponent(userText));
+    res.setHeader('X-Reply-Text', encodeURIComponent(replyText));
+    res.setHeader('X-Reply-Clean', encodeURIComponent(replyClean));
+    res.setHeader('X-Agent', currentAgent?.name || 'unknown');
+    res.setHeader('X-Timing-Stt', timings.stt);
+    res.setHeader('X-Timing-Chat', timings.chat);
+    res.setHeader('X-Timing-Tts', timings.tts);
+    res.setHeader('X-Timing-Total', timings.total);
+
+    res.sendFile(ttsPath, async (err) => {
+      if (err) console.error('[PIPELINE] sendFile:', err);
+      try { await unlink(ttsPath); } catch {}
+    });
+
+  } catch (err) {
+    console.error('[PIPELINE] Error:', err);
+    res.status(500).json({ error: err.message, timings });
+  }
+});
+
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok',
