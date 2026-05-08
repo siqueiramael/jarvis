@@ -1,28 +1,20 @@
-version: '3.8'
-
 services:
   jarvis-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    build: .
     container_name: jarvis-api
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
-      NODE_ENV: production
       PORT: 3000
-      OPENAI_API_BASE: http://100.112.73.46:1234/v1
-      OPENAI_API_KEY: sk-local-lm-studio
-      LM_STUDIO_MODEL: openhermes-2.5-neural-chat-7b-v3-2-7b
+      OPENAI_API_BASE: ${OPENAI_API_BASE}
+      LM_STUDIO_MODEL: ${LM_STUDIO_MODEL}
       OBSIDIAN_VAULT: /app/data/obsidian-vault
       GIT_REPO: https://github.com/siqueiramael/jarvis-brain.git
-      GIT_BRANCH: main
+      GIT_BRANCH: master
       TAILSCALE_VPS_IP: 100.114.78.91
       TAILSCALE_WINDOWS_IP: 100.112.73.46
     volumes:
-      - ./public:/app/public:ro
-      - ./.claude:/app/.claude:ro
       - ./data/obsidian-vault:/app/data/obsidian-vault
       - ./logs:/app/logs
     networks:
@@ -36,10 +28,10 @@ services:
       - ./data/obsidian-vault:/vault
     environment:
       GIT_REPO: https://github.com/siqueiramael/jarvis-brain.git
-      GIT_BRANCH: main
+      GIT_BRANCH: master
     networks:
       - jarvis-network
-    command: sh -c "apk add --no-cache git ca-certificates && cd /vault && test -d .git || git clone -b main https://github.com/siqueiramael/jarvis-brain.git . && while true; do sleep 300; git pull 2>/dev/null || true; done"
+    command: sh -c "apk add --no-cache git ca-certificates && cd /vault && test -d .git || git clone -b $$GIT_BRANCH $$GIT_REPO . && while true; do sleep 300; cd /vault && git pull origin $$GIT_BRANCH 2>/dev/null || true; done"
 
 networks:
   jarvis-network:
