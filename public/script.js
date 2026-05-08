@@ -3286,3 +3286,108 @@ initRealtimeBtn();
   
   console.log('[MINI CHAT] ✅ Pronto para uso!');
 })();
+
+// ═══════════════════════════════════════════
+// SISTEMA DE AGENTES v2.0
+// ═══════════════════════════════════════════
+(function() {
+  let currentAgentId = 'aios-master';
+  let agentsList = [];
+  
+  // Carregar lista de agentes
+  async function loadAgents() {
+    try {
+      const response = await fetch('/api/agents');
+      const data = await response.json();
+      
+      agentsList = data.agents;
+      currentAgentId = data.current;
+      
+      console.log(`[AGENTS] ✅ ${agentsList.length} agentes carregados`);
+      console.log(`[AGENTS] 🎯 Ativo: ${currentAgentId}`);
+      
+      updateAgentUI();
+    } catch (err) {
+      console.error('[AGENTS] ❌ Erro ao carregar:', err);
+    }
+  }
+  
+  // Selecionar agente
+  async function selectAgent(agentId) {
+    try {
+      const response = await fetch('/api/agents/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agentId })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        currentAgentId = agentId;
+        console.log(`[AGENTS] ✅ Agente selecionado: ${data.agent.name}`);
+        updateAgentUI();
+        
+        // Feedback visual no chat
+        if (window.addMiniLine) {
+          addMiniLine(`🤖 Agente ativo: ${data.agent.name}`, 'system');
+        }
+      }
+    } catch (err) {
+      console.error('[AGENTS] ❌ Erro ao selecionar:', err);
+    }
+  }
+  
+  // Atualizar UI (marcar agente ativo)
+  function updateAgentUI() {
+    // Remover "active" de todos
+    document.querySelectorAll('.aiox-agent').forEach(el => {
+      el.classList.remove('active');
+    });
+    
+    // Marcar agente ativo
+    const activeAgent = document.querySelector(`.aiox-agent[data-entity="${currentAgentId}"]`);
+    if (activeAgent) {
+      activeAgent.classList.add('active');
+    }
+  }
+  
+  // Adicionar eventos de click nos agentes
+  function setupAgentClicks() {
+    // Mapear IDs da UI para IDs dos agentes
+    const agentMap = {
+      'aios-master': 'aios-master',
+      'architect': 'architect',
+      'dev': 'dev',
+      'data-engineer': 'data-engineer',
+      'devops': 'devops',
+      'ux': 'ux-design-expert',
+      'pm': 'pm',
+      'po': 'po',
+      'analyst': 'analyst',
+      'qa': 'qa',
+      'sm': 'sm',
+      'squad-creator': 'squad-creator'
+    };
+    
+    document.querySelectorAll('.aiox-agent').forEach(el => {
+      const entity = el.getAttribute('data-entity');
+      const agentId = agentMap[entity];
+      
+      if (agentId) {
+        el.style.cursor = 'pointer';
+        el.addEventListener('click', () => {
+          selectAgent(agentId);
+        });
+      }
+    });
+  }
+  
+  // Inicializar
+  document.addEventListener('DOMContentLoaded', () => {
+    loadAgents();
+    setupAgentClicks();
+  });
+  
+  console.log('[AGENTS FRONTEND] ✅ Sistema inicializado!');
+})();
