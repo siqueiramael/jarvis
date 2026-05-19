@@ -9,6 +9,7 @@ services:
       PORT: 3000
       OPENAI_API_BASE: ${OPENAI_API_BASE}
       LM_STUDIO_MODEL: ${LM_STUDIO_MODEL}
+      WHISPER_URL: ${WHISPER_URL}
       OBSIDIAN_VAULT: /app/data/obsidian-vault
       GIT_REPO: https://github.com/siqueiramael/jarvis-brain.git
       GIT_BRANCH: master

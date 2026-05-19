@@ -87,32 +87,75 @@ async function readNote(notePath) {
 // VOICE ENDPOINTS
 // ============================================
 
+// ============================================
+// STT helper: chama Whisper Windows (GPU) com fallback pro whisper.cpp local
+// ============================================
+async function transcribeAudio(audioPath, language = 'pt') {
+  const whisperUrl = process.env.WHISPER_URL;
+
+  // Caminho A: Whisper Windows (preferencial — GPU)
+  if (whisperUrl) {
+    try {
+      const { readFile } = await import('fs/promises');
+      const path = await import('path');
+
+      // Ler arquivo em buffer e criar Blob (FormData nativo Node 18+)
+      const buffer = await readFile(audioPath);
+      const blob = new Blob([buffer], { type: 'audio/wav' });
+
+      const form = new FormData();
+      form.append('audio', blob, path.basename(audioPath));
+      form.append('language', language);
+
+      const resp = await fetch(`${whisperUrl}/transcribe`, {
+        method: 'POST',
+        body: form,
+        signal: AbortSignal.timeout(60000)
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        console.log(`[STT-Windows] ${data.elapsed_ms}ms → "${data.text.substring(0, 60)}..."`);
+        return { text: data.text || '', source: 'windows-gpu', elapsed: data.elapsed_ms };
+      } else {
+        const errBody = await resp.text().catch(() => 'no body');
+        console.error('[STT-Windows] HTTP', resp.status, 'body:', errBody.substring(0, 300), '— caindo para fallback CPU');
+      }
+    } catch (err) {
+      console.error('[STT-Windows] Falhou:', err.message, '— caindo para fallback CPU');
+    }
+  }
+
+  // Caminho B: whisper.cpp local (fallback)
+  console.log('[STT-Local] Usando whisper.cpp CPU (lento)');
+  // Converter pra WAV 16k mono primeiro
+  const wavPath = `${audioPath}.wav`;
+  await execAsync(`ffmpeg -y -i ${audioPath} -ar 16000 -ac 1 -c:a pcm_s16le ${wavPath} 2>&1`);
+
+  const { stdout } = await execAsync(
+    `${WHISPER_PATH} -m ${WHISPER_MODEL} -f ${wavPath} --language ${language} --no-timestamps`
+  );
+
+  const { unlink } = await import('fs/promises');
+  await unlink(wavPath).catch(() => {});
+
+  const lines = stdout.split('\n');
+  const text = (lines.find(l => l.trim() && !l.includes('[') && !l.includes('whisper_')) || '').trim();
+  return { text, source: 'cpu-local', elapsed: null };
+}
+
 // STT: Audio → Text
 app.post('/api/voice/stt', upload.single('audio'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No audio file' });
-    }
-    
+    if (!req.file) return res.status(400).json({ error: 'No audio file' });
+
     const audioPath = req.file.path;
     console.log(`[STT] Processing: ${audioPath}`);
-    
-    // Executar Whisper
-    const { stdout } = await execAsync(
-      `${WHISPER_PATH} -m ${WHISPER_MODEL} -f ${audioPath} --language pt --no-timestamps`
-    );
-    
-    // Extrair texto do output
-    const lines = stdout.split('\n');
-    const textLine = lines.find(l => l.trim() && !l.includes('[') && !l.includes('whisper_'));
-    const text = textLine ? textLine.trim() : '';
-    
-    // Limpar arquivo temporário
-    await unlink(audioPath);
-    
-    console.log(`[STT] Result: ${text}`);
-    res.json({ text });
-    
+
+    const result = await transcribeAudio(audioPath, 'pt');
+    await unlink(audioPath).catch(() => {});
+
+    res.json({ text: result.text, source: result.source, elapsed_ms: result.elapsed });
   } catch (err) {
     console.error('[STT] Error:', err.message);
     res.status(500).json({ error: err.message });
@@ -258,29 +301,16 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     const useRAG = req.body.useRAG === 'true';
     const searchQuery = req.body.searchQuery || '';
 
-    // ─── 1. STT ───
+    // ─── 1. STT (via helper: Windows GPU preferencial) ───
     const tStt = Date.now();
     console.log(`[PIPELINE] STT processando: ${audioPath}`);
 
-    // Converter pra WAV 16kHz mono (formato canônico do Whisper)
-    const wavPath = `${audioPath}.wav`;
-    try {
-      await execAsync(`ffmpeg -y -i ${audioPath} -ar 16000 -ac 1 -c:a pcm_s16le ${wavPath} 2>&1`);
-    } catch (ffErr) {
-      console.error('[PIPELINE] ffmpeg falhou:', ffErr.message);
-      await unlink(audioPath).catch(() => {});
-      return res.status(400).json({ error: 'Audio conversion failed', details: ffErr.message });
-    }
-
-    const { stdout: sttOut } = await execAsync(
-      `${WHISPER_PATH} -m ${WHISPER_MODEL} -f ${wavPath} --language pt --no-timestamps`
-    );
-    const sttLines = sttOut.split('\n');
-    const userText = (sttLines.find(l => l.trim() && !l.includes('[') && !l.includes('whisper_')) || '').trim();
+    const sttResult = await transcribeAudio(audioPath, 'pt');
+    const userText = sttResult.text;
     timings.stt = Date.now() - tStt;
+    timings.sttSource = sttResult.source;
 
     await unlink(audioPath).catch(() => {});
-    await unlink(wavPath).catch(() => {});
 
     if (!userText) {
       return res.status(400).json({ error: 'STT returned empty', timings });
