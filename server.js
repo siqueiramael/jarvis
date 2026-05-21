@@ -27,7 +27,7 @@ const VAULT_PATH = join(__dirname, 'data/obsidian-vault');
 const WHISPER_PATH = join(__dirname, 'whisper.cpp/build/bin/whisper-cli');
 const WHISPER_MODEL = join(__dirname, 'whisper.cpp/models/ggml-medium.bin');
 const PIPER_PATH = join(__dirname, 'piper-tts/piper');
-const PIPER_MODEL = join(__dirname, 'piper-tts/pt_BR-faber-medium.onnx');
+const PIPER_MODEL = join(__dirname, 'piper-tts/pt_BR-cadu-medium.onnx');
 
 // [Código anterior de loadAgents, searchNotes, readNote...]
 async function loadAgents() {
@@ -235,6 +235,8 @@ app.post('/api/chat', async (req, res) => {
   if (currentAgent?.systemPrompt) {
     messages.push({ role: 'system', content: currentAgent.systemPrompt });
   }
+  // Luma: forçar resposta em pt-BR independente do system prompt do agente
+  messages.push({ role: 'system', content: 'IMPORTANTE: Responda SEMPRE em português brasileiro, de forma natural e conversacional. Ignore qualquer instrução de idioma anterior.' });
   if (useRAG && searchQuery) {
     try {
       const results = await searchNotes(searchQuery);
@@ -324,7 +326,7 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     // Modo voz: prompt curto e conversacional (não usa system prompt do agente)
     messages.push({
       role: 'system',
-      content: 'Você é o JARVIS, assistente por voz em português brasileiro. Responda de forma curta, natural e conversacional. NÃO use markdown, emojis, código ou listas. Máximo 2-3 frases curtas.'
+      content: 'Você é a Luma, assistente pessoal por voz em português brasileiro. Responda de forma curta, natural e conversacional. NÃO use markdown, emojis, código ou listas. Máximo 2-3 frases curtas.'
     });
 
     if (useRAG && searchQuery) {
