@@ -392,6 +392,64 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
   }
 });
 
+
+// ─── LOCAL AGENT (Phase 7a) ──────────────────────────────────────────────
+async function callAgent(endpoint, payload = null) {
+  const agentUrl = process.env.JARVIS_AGENT_URL;
+  const agentToken = process.env.JARVIS_AGENT_TOKEN;
+  if (!agentUrl) throw new Error('JARVIS_AGENT_URL not configured');
+  const resp = await fetch(`${agentUrl}${endpoint}`, {
+    method: payload ? 'POST' : 'GET',
+    headers: { 'Content-Type': 'application/json', 'x-agent-token': agentToken },
+    ...(payload && { body: JSON.stringify(payload) })
+  });
+  if (!resp.ok) throw new Error(`Agent ${resp.status}: ${await resp.text()}`);
+  return resp.json();
+}
+
+app.post('/api/agent/execute', async (req, res) => {
+  try {
+    const { cmd, timeout = 30 } = req.body;
+    if (!cmd) return res.status(400).json({ error: 'cmd required' });
+    const result = await callAgent('/execute/shell', { cmd, timeout });
+    res.json(result);
+  } catch (err) {
+    console.error('[AGENT]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/agent/screenshot', async (req, res) => {
+  try {
+    const result = await callAgent('/capture/screenshot');
+    res.json(result);
+  } catch (err) {
+    console.error('[AGENT]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/agent/file/read', async (req, res) => {
+  try {
+    const { path } = req.body;
+    if (!path) return res.status(400).json({ error: 'path required' });
+    res.json(await callAgent('/filesystem/read', { path }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/agent/file/list', async (req, res) => {
+  try {
+    const { path } = req.body;
+    if (!path) return res.status(400).json({ error: 'path required' });
+    res.json(await callAgent('/filesystem/list', { path }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok',
