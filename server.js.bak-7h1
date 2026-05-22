@@ -43,7 +43,7 @@ const SPECIALIST_CONTEXTS = {
   architect: {
     name: 'Aria', icon: '🏛️',
     context: 'Modo especialista ativo: Aria (Architect). Mantenha a personalidade da Luma mas aplique visão holística de arquitetura de sistemas. Pense em trade-offs, escalabilidade, padrões de design, stack tecnológica e decisões estruturais de longo prazo.',
-    keywords: ['arquitetura', 'design de sistema', 'estrutura do projeto', 'escalabilidade', 'escalar', 'escala', 'microserviço', 'monolito', 'padrão de design', 'stack tecnológica', 'decisão técnica', 'diagrama de sistema', 'componente', 'módulo', 'separação de responsabilidades', 'estruturar', 'como estruturar']
+    keywords: ['arquitetura', 'design de sistema', 'estrutura do projeto', 'escalabilidade', 'microserviço', 'monolito', 'padrão de design', 'stack tecnológica', 'decisão técnica', 'diagrama de sistema', 'componente', 'módulo', 'separação de responsabilidades']
   },
   devops: {
     name: 'Gage', icon: '⚡',
@@ -67,74 +67,15 @@ const SPECIALIST_CONTEXTS = {
   }
 };
 
-// Mapeamento @nome → specialistId (case-insensitive)
-const MENTION_MAP = {
-  '@dex':    'dev',
-  '@aria':   'architect',
-  '@gage':   'devops',
-  '@dara':   'data-engineer',
-  '@quinn':  'qa',
-  '@morgan': 'pm'
-};
-
-// Retorna { id: specialistId|null, cleanMessage: string }
-// Prioridade: @mention explícito > keyword scoring
-// Score mínimo: 1 (mensagens longas) ou 2 (mensagens curtas, < 5 palavras)
-// Retorna { matches: [{ id, score }], cleanMessage }
-// @mention → score 99 (prioridade absoluta, nunca entra em Conclave)
-// Score mínimo: 2 (msg curta < 5 palavras) ou 1 (msg longa)
 function detectIntent(message) {
-  // 1. @mention explícito — score artificial 99
-  const mentionMatch = message.match(/@(\w+)/i);
-  if (mentionMatch) {
-    const key = mentionMatch[0].toLowerCase();
-    const specialistId = MENTION_MAP[key] || null;
-    const cleanMessage = message.replace(mentionMatch[0], '').replace(/\s+/g, ' ').trim();
-    if (specialistId) {
-      console.log(`[ORCHESTRATOR] @mention detectado: ${key} → ${specialistId}`);
-      return { matches: [{ id: specialistId, score: 99 }], cleanMessage };
-    }
-  }
-
-  // 2. Keyword scoring — coleta TODOS os matches acima do threshold
   const lower = message.toLowerCase();
-  const wordCount = message.trim().split(/\s+/).length;
-  const minScore = wordCount < 5 ? 2 : 1;
-
-  const matches = [];
+  let bestMatch = null;
+  let bestScore = 0;
   for (const [id, spec] of Object.entries(SPECIALIST_CONTEXTS)) {
     const score = spec.keywords.filter(kw => lower.includes(kw)).length;
-    if (score >= minScore) matches.push({ id, score });
+    if (score > bestScore) { bestScore = score; bestMatch = id; }
   }
-  matches.sort((a, b) => b.score - a.score);
-
-  return { matches, cleanMessage: message };
-}
-
-// Prompt de síntese injetado no Conclave após os contextos individuais
-const CONCLAVE_CONTEXT = 'Modo Conclave ativo: múltiplos especialistas foram detectados. As perspectivas de cada um já foram injetadas acima. Sintetize uma resposta integrada que combine os insights de todas as áreas — não escolha apenas um ponto de vista. Identifique onde as perspectivas se complementam ou divergem e entregue uma análise holística. Mantenha a personalidade da Luma.';
-
-// Resolve o modo de orquestração: 'generic' | 'specialist' | 'conclave'
-function resolveOrchestration(matches) {
-  if (matches.length === 0)
-    return { mode: 'generic', specialist: null };
-
-  // @mention (score 99) → specialist único, nunca Conclave
-  if (matches[0].score === 99) {
-    const id = matches[0].id;
-    return { mode: 'specialist', specialist: { id, ...SPECIALIST_CONTEXTS[id] } };
-  }
-
-  if (matches.length === 1) {
-    const id = matches[0].id;
-    return { mode: 'specialist', specialist: { id, ...SPECIALIST_CONTEXTS[id] } };
-  }
-
-  // ≥ 2 matches orgânicos → Conclave
-  return {
-    mode: 'conclave',
-    specialists: matches.map(m => ({ id: m.id, ...SPECIALIST_CONTEXTS[m.id] }))
-  };
+  return bestScore >= 1 ? bestMatch : null;
 }
 
 async function saveSessionToObsidian(sessionId) {
@@ -370,25 +311,12 @@ app.get('/api/obsidian/note', async (req, res) => {
 // 7g: Debug endpoint — detecta qual specialist seria ativado
 app.get('/api/agents/detect', (req, res) => {
   const q = req.query.q || '';
-  const { matches, cleanMessage: clean } = detectIntent(q);
-  const orch = resolveOrchestration(matches);
-
-  let detected = null, specialist = null, specialists = null;
-  if (orch.mode === 'specialist') {
-    detected = orch.specialist.id;
-    specialist = { id: orch.specialist.id, name: orch.specialist.name, icon: orch.specialist.icon };
-  } else if (orch.mode === 'conclave') {
-    detected = 'conclave';
-    specialists = orch.specialists.map(s => ({ id: s.id, name: s.name, icon: s.icon }));
-  }
-
+  const specialistId = detectIntent(q);
+  const spec = specialistId ? SPECIALIST_CONTEXTS[specialistId] : null;
   res.json({
-    mode: orch.mode,
-    detected,
-    specialist,
-    specialists,
-    query: q,
-    cleanQuery: clean
+    detected: specialistId,
+    specialist: spec ? { id: specialistId, name: spec.name, icon: spec.icon } : null,
+    query: q
   });
 });
 
@@ -410,24 +338,14 @@ app.post('/api/chat', async (req, res) => {
   // Luma: forçar resposta em pt-BR independente do system prompt do agente
   messages.push({ role: 'system', content: 'IMPORTANTE: Responda SEMPRE em português brasileiro, de forma natural e conversacional. Ignore qualquer instrução de idioma anterior.' });
 
-  // 7i: Orquestração multi-intent — specialist único ou Conclave
-  const { matches, cleanMessage } = detectIntent(message);
-  const orch = resolveOrchestration(matches);
+  // 7g: Orquestração — detecta intent e injeta contexto do specialist
+  const specialistId = detectIntent(message);
   let specialistActive = null;
-
-  if (orch.mode === 'specialist') {
-    const spec = orch.specialist;
-    specialistActive = { id: spec.id, name: spec.name, icon: spec.icon };
+  if (specialistId) {
+    const spec = SPECIALIST_CONTEXTS[specialistId];
+    specialistActive = { id: specialistId, name: spec.name, icon: spec.icon };
     messages.push({ role: 'system', content: spec.context });
     console.log(`[ORCHESTRATOR] ${spec.icon} ${spec.name} ativado: "${message.substring(0, 50)}"`);
-  } else if (orch.mode === 'conclave') {
-    const names = orch.specialists.map(s => s.name).join(' + ');
-    specialistActive = { id: 'conclave', name: 'Conclave', icon: '🔮', specialists: orch.specialists.map(s => s.id) };
-    for (const spec of orch.specialists) {
-      messages.push({ role: 'system', content: spec.context });
-    }
-    messages.push({ role: 'system', content: CONCLAVE_CONTEXT });
-    console.log(`[ORCHESTRATOR] 🔮 Conclave (${names}) ativado: "${message.substring(0, 50)}"`);
   }
 
   // Historico da sessao
@@ -446,7 +364,7 @@ app.post('/api/chat', async (req, res) => {
       console.error('[RAG] Erro:', err.message);
     }
   }
-  messages.push({ role: 'user', content: cleanMessage });
+  messages.push({ role: 'user', content: message });
   
   try {
     const response = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
@@ -491,7 +409,7 @@ app.post('/api/chat', async (req, res) => {
     }
 
     // Salva no histórico da sessão
-    session.messages.push({ role: 'user', content: cleanMessage });
+    session.messages.push({ role: 'user', content: message });
     session.messages.push({ role: 'assistant', content: replyText });
 
     res.json({ reply: replyText, action, actionResult, agent: currentAgent?.name, ragUsed: useRAG && searchQuery, sessionId, specialistActive });
@@ -573,27 +491,7 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
       }
     }
 
-    // 7i: Orquestração multi-intent no pipeline de voz
-    const { matches: voiceMatches, cleanMessage: voiceCleanText } = detectIntent(userText);
-    const voiceOrch = resolveOrchestration(voiceMatches);
-    let voiceSpecialistActive = null;
-
-    if (voiceOrch.mode === 'specialist') {
-      const spec = voiceOrch.specialist;
-      voiceSpecialistActive = { id: spec.id, name: spec.name, icon: spec.icon };
-      messages.push({ role: 'system', content: spec.context });
-      console.log(`[PIPELINE] ${spec.icon} ${spec.name} ativado: "${voiceCleanText.substring(0, 50)}"`);
-    } else if (voiceOrch.mode === 'conclave') {
-      const names = voiceOrch.specialists.map(s => s.name).join(' + ');
-      voiceSpecialistActive = { id: 'conclave', name: 'Conclave', icon: '🔮', specialists: voiceOrch.specialists.map(s => s.id) };
-      for (const spec of voiceOrch.specialists) {
-        messages.push({ role: 'system', content: spec.context });
-      }
-      messages.push({ role: 'system', content: CONCLAVE_CONTEXT });
-      console.log(`[PIPELINE] 🔮 Conclave (${names}) ativado: "${voiceCleanText.substring(0, 50)}"`);
-    }
-
-    messages.push({ role: 'user', content: voiceCleanText });
+    messages.push({ role: 'user', content: userText });
 
     const llmResp = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
       method: 'POST',
@@ -607,7 +505,7 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     });
 
     const llmData = await llmResp.json();
-    const replyText = (llmData.choices?.[0]?.message?.content || 'Erro ao gerar resposta.').replace(/<0x[0-9A-Fa-f]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    const replyText = llmData.choices?.[0]?.message?.content || 'Erro ao gerar resposta.';
     timings.chat = Date.now() - tChat;
     console.log(`[PIPELINE] CHAT (${timings.chat}ms): "${replyText.substring(0, 80)}..."`);
 
@@ -627,7 +525,6 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     res.setHeader('X-Reply-Text', encodeURIComponent(replyText));
     res.setHeader('X-Reply-Clean', encodeURIComponent(replyClean));
     res.setHeader('X-Agent', currentAgent?.name || 'unknown');
-    res.setHeader('X-Specialist-Active', voiceSpecialistActive ? encodeURIComponent(JSON.stringify(voiceSpecialistActive)) : '');
     res.setHeader('X-Timing-Stt', timings.stt);
     res.setHeader('X-Timing-Chat', timings.chat);
     res.setHeader('X-Timing-Tts', timings.tts);
