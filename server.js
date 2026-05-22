@@ -43,7 +43,7 @@ const SPECIALIST_CONTEXTS = {
   architect: {
     name: 'Aria', icon: '🏛️',
     context: 'Modo especialista ativo: Aria (Architect). Mantenha a personalidade da Luma mas aplique visão holística de arquitetura de sistemas. Pense em trade-offs, escalabilidade, padrões de design, stack tecnológica e decisões estruturais de longo prazo.',
-    keywords: ['arquitetura', 'design de sistema', 'estrutura do projeto', 'escalabilidade', 'escalar', 'escala', 'microserviço', 'monolito', 'padrão de design', 'stack tecnológica', 'decisão técnica', 'diagrama de sistema', 'componente', 'módulo', 'separação de responsabilidades', 'estruturar', 'como estruturar']
+    keywords: ['arquitetura', 'design de sistema', 'estrutura do projeto', 'escalabilidade', 'escalar', 'escala', 'escalável', 'microserviço', 'monolito', 'padrão de design', 'stack tecnológica', 'decisão técnica', 'diagrama de sistema', 'componente', 'módulo', 'separação de responsabilidades', 'estruturar', 'estruturo', 'estrutura']
   },
   devops: {
     name: 'Gage', icon: '⚡',
@@ -53,7 +53,7 @@ const SPECIALIST_CONTEXTS = {
   'data-engineer': {
     name: 'Dara', icon: '📊',
     context: 'Modo especialista ativo: Dara (Data Engineer). Mantenha a personalidade da Luma mas aplique expertise em dados e banco de dados. Foque em modelagem de dados, queries eficientes, ETL e integridade.',
-    keywords: ['banco de dados', 'query', 'sql', 'pipeline de dados', 'etl', 'schema', 'esquema', 'tabela', 'índice', 'postgres', 'mysql', 'mongodb', 'migration', 'orm', 'join', 'aggregate', 'base de dados', 'modelagem']
+    keywords: ['banco de dados', 'bancos de dados', 'base de dados', 'query', 'sql', 'pipeline de dados', 'etl', 'schema', 'esquema', 'tabela', 'índice', 'postgres', 'mysql', 'mongodb', 'migration', 'orm', 'join', 'aggregate', 'modelagem', 'modelo de dados']
   },
   qa: {
     name: 'Quinn', icon: '🔍',
@@ -104,9 +104,9 @@ function detectIntent(message) {
   const matches = [];
   for (const [id, spec] of Object.entries(SPECIALIST_CONTEXTS)) {
     const score = spec.keywords.filter(kw => {
-      // Multi-word keywords: substring exato; single-word: word boundary
+      // Multi-word: substring exato; single-word: prefix boundary (sem \\b final)
       if (kw.includes(' ')) return lower.includes(kw);
-      return new RegExp('\\b' + kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(lower);
+      return new RegExp('\\b' + kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).test(lower);
     }).length;
     if (score >= minScore) matches.push({ id, score });
   }

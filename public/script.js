@@ -3506,11 +3506,16 @@ initRealtimeBtn();
       const tTts = response.headers.get('X-Timing-Tts');
       const tTotal = response.headers.get('X-Timing-Total');
 
+      // 7k-A: Atualiza badge do specialist no voice pipeline
+      const specialistHeader = response.headers.get('X-Specialist-Active') || '';
+      const specialistActive = specialistHeader ? JSON.parse(decodeURIComponent(specialistHeader)) : null;
+      if (window.updateSpecialistBadge) window.updateSpecialistBadge(specialistActive);
+
       // Mostrar no chat
       if (userText) addVoiceLine('🗣️  ' + userText, 'user');
       if (replyText) addVoiceLine('🤖 ' + replyText, 'assistant');
 
-      console.log(`[VOICE] STT:${tStt}ms CHAT:${tChat}ms TTS:${tTts}ms TOTAL:${tTotal}ms`);
+      console.log(`[VOICE] STT:${tStt}ms CHAT:${tChat}ms TTS:${tTts}ms TOTAL:${tTotal}ms | specialist: ${specialistActive?.id || 'none'}`);
 
       // Tocar áudio resposta
       const audioBuffer = await response.arrayBuffer();
