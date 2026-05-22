@@ -23,6 +23,45 @@ app.use(express.static(join(__dirname, 'public')));
 
 let currentAgent = null;
 let agentsList = [];
+
+// ============================================
+// SESSION STORE — histórico de conversa
+// ============================================
+const sessionStore = new Map();
+const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 min idle → auto-save
+const SESSION_MAX_HISTORY = 20; // últimas 20 mensagens no contexto
+
+async function saveSessionToObsidian(sessionId) {
+  const session = sessionStore.get(sessionId);
+  if (!session || session.messages.length === 0) return;
+  const now = new Date();
+  const dateStr = now.toISOString().split('T')[0];
+  const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const turns = Math.floor(session.messages.length / 2);
+  const title = 'Sessao ' + dateStr + ' ' + timeStr + ' (' + turns + ' turnos)';
+  const lines = session.messages.map(function(m) {
+    return '**' + (m.role === 'user' ? 'Voce' : 'Luma') + ':** ' + m.content;
+  }).join('\n\n');
+  const content = 'Agente: ' + (session.agentId || 'luma') + '\n\n' + lines;
+  try {
+    await createObsidianNote({ title, content, folder: 'Luma/Sessoes' });
+    console.log('[SESSION] Sessao ' + sessionId + ' salva no Obsidian (' + turns + ' turnos)');
+  } catch (err) {
+    console.error('[SESSION] Erro ao salvar:', err.message);
+  }
+  sessionStore.delete(sessionId);
+}
+
+// Auto-save sessões idle
+setInterval(async () => {
+  const now = Date.now();
+  for (const [sid, session] of sessionStore.entries()) {
+    if (now - session.lastActivity > SESSION_TIMEOUT_MS && session.messages.length > 0) {
+      console.log(`[SESSION] Auto-save por idle: ${sid}`);
+      await saveSessionToObsidian(sid).catch(() => {});
+    }
+  }
+}, 60 * 1000);
 const VAULT_PATH = join(__dirname, 'data/obsidian-vault');
 const WHISPER_PATH = join(__dirname, 'whisper.cpp/build/bin/whisper-cli');
 const WHISPER_MODEL = join(__dirname, 'whisper.cpp/models/ggml-medium.bin');
@@ -44,7 +83,7 @@ async function loadAgents() {
         return { id: name, name: title, file, systemPrompt: content };
       })
     );
-    currentAgent = agentsList.find(a => a.id === 'aios-master') || agentsList[0];
+    currentAgent = agentsList.find(a => a.id === 'luma') || agentsList[0];
     console.log(`[AGENTS] ✅ ${agentsList.length} agentes`);
   } catch (err) {
     console.error('[AGENTS] ❌', err.message);
@@ -223,8 +262,15 @@ app.get('/api/obsidian/note', async (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-  const { message, useRAG = false, searchQuery } = req.body;
+  const { message, useRAG = false, searchQuery, sessionId = 'default' } = req.body;
   if (!message) return res.status(400).json({ error: 'Message required' });
+
+  // Sessao: pega ou cria
+  if (!sessionStore.has(sessionId)) {
+    sessionStore.set(sessionId, { messages: [], lastActivity: Date.now(), agentId: currentAgent?.id });
+  }
+  const session = sessionStore.get(sessionId);
+  session.lastActivity = Date.now();
   
   const messages = [];
   if (currentAgent?.systemPrompt) {
@@ -232,6 +278,12 @@ app.post('/api/chat', async (req, res) => {
   }
   // Luma: forçar resposta em pt-BR independente do system prompt do agente
   messages.push({ role: 'system', content: 'IMPORTANTE: Responda SEMPRE em português brasileiro, de forma natural e conversacional. Ignore qualquer instrução de idioma anterior.' });
+
+  // Historico da sessao
+  if (session.messages.length > 0) {
+    const history = session.messages.slice(-SESSION_MAX_HISTORY);
+    messages.push(...history);
+  }
   if (useRAG && searchQuery) {
     try {
       const results = await searchNotes(searchQuery);
@@ -257,7 +309,41 @@ app.post('/api/chat', async (req, res) => {
       })
     });
     const data = await response.json();
-    res.json({ reply: data.choices[0].message.content, agent: currentAgent?.name, ragUsed: useRAG && searchQuery });
+    const rawContent = data.choices[0].message.content;
+
+    // Tenta parse de action JSON da Luma
+    let replyText = rawContent;
+    let action = null;
+    let actionResult = null;
+
+    try {
+      const trimmed = rawContent.trim();
+      // Tenta parse direto (resposta começa com JSON)
+      let jsonStr = trimmed.startsWith('{') ? trimmed : null;
+      // Fallback: extrai JSON mesmo quando LLM coloca texto antes
+      if (!jsonStr) {
+        const match = trimmed.match(/\{[\s\S]*?"text"[\s\S]*?"action"[\s\S]*\}/);
+        if (match) jsonStr = match[0];
+      }
+      if (jsonStr) {
+        const parsed = JSON.parse(jsonStr);
+        if (parsed.text && parsed.action) {
+          replyText = parsed.text;
+          action = parsed.action;
+        }
+      }
+    } catch { /* resposta normal em texto */ }
+
+    // Executa action se existir
+    if (action) {
+      actionResult = await executeAction(action);
+    }
+
+    // Salva no histórico da sessão
+    session.messages.push({ role: 'user', content: message });
+    session.messages.push({ role: 'assistant', content: replyText });
+
+    res.json({ reply: replyText, action, actionResult, agent: currentAgent?.name, ragUsed: useRAG && searchQuery, sessionId });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -444,6 +530,135 @@ app.post('/api/agent/file/list', async (req, res) => {
 });
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ============================================
+// OBSIDIAN: CREATE + APPEND
+// ============================================
+async function createObsidianNote({ title, content, folder = '' }) {
+  const pathMod = await import('path');
+  const sanitizedTitle = title.replace(/[\\/:*?"<>|]/g, '-');
+  const noteFolder = folder
+    ? pathMod.default.join(VAULT_PATH, folder)
+    : VAULT_PATH;
+  const { mkdir } = await import('fs/promises');
+  await mkdir(noteFolder, { recursive: true });
+  const notePath = pathMod.default.join(noteFolder, `${sanitizedTitle}.md`);
+  const date = new Date().toISOString().split('T')[0];
+  const noteContent = `# ${title}\n\nData: ${date}\n\n${content || ''}`;
+  await writeFile(notePath, noteContent, 'utf-8');
+  const relativePath = notePath.replace(VAULT_PATH + '/', '');
+  return { success: true, path: relativePath, title };
+}
+
+async function appendObsidianNote({ path: notePath, content }) {
+  const fullPath = join(VAULT_PATH, notePath);
+  if (!fullPath.startsWith(VAULT_PATH)) throw new Error('Path inválido');
+  const existing = existsSync(fullPath) ? await readFile(fullPath, 'utf-8') : '';
+  const timestamp = new Date().toLocaleString('pt-BR');
+  const appended = existing + `\n\n---\n*Adicionado em ${timestamp}*\n\n${content}`;
+  await writeFile(fullPath, appended, 'utf-8');
+  return { success: true, path: notePath };
+}
+
+// ============================================
+// EXECUTE ACTION — roteador central
+// ============================================
+async function executeAction(action) {
+  if (!action || !action.type) return { error: 'Action sem type definido' };
+  const { type, params } = action;
+  console.log(`[ACTION] Executando: ${type}`, params);
+  try {
+    switch (type) {
+      case 'create_note':
+        return await createObsidianNote(params);
+      case 'append_note':
+        return await appendObsidianNote(params);
+      case 'execute_shell':
+        return await callAgent('/execute/shell', params);
+      case 'git_commit': {
+        const { message, path: repoPath } = params;
+        // VPS: paths começam com / → execAsync direto
+        // Windows: paths começam com D:\ etc → via agent
+        if (repoPath.startsWith('/')) {
+          const { stdout, stderr } = await execAsync(
+            `cd "${repoPath}" && git add . && git commit -m "${message}" && git push`,
+            { timeout: 60000 }
+          );
+          return { success: true, stdout, stderr };
+        } else {
+          const cmd = `cmd /c "cd /d \"${repoPath}\" && git add . && git commit -m \"${message}\" && git push"`;
+          return await callAgent('/execute/shell', { cmd, timeout: 60 });
+        }
+      }
+      case 'open_app':
+        return await callAgent('/execute/shell', { cmd: params.cmd, timeout: 10 });
+      case 'screenshot':
+        return await callAgent('/capture/screenshot');
+      default:
+        return { error: `Action desconhecida: ${type}` };
+    }
+  } catch (err) {
+    console.error(`[ACTION] Erro em ${type}:`, err.message);
+    return { error: err.message };
+  }
+}
+
+// ============================================
+// ENDPOINTS: Obsidian Create + Append + Actions Run
+// ============================================
+app.post('/api/obsidian/create', async (req, res) => {
+  try {
+    const { title, content, folder } = req.body;
+    if (!title) return res.status(400).json({ error: 'title required' });
+    const result = await createObsidianNote({ title, content, folder });
+    res.json(result);
+  } catch (err) {
+    console.error('[OBSIDIAN CREATE]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/obsidian/append', async (req, res) => {
+  try {
+    const { path, content } = req.body;
+    if (!path || !content) return res.status(400).json({ error: 'path e content required' });
+    const result = await appendObsidianNote({ path, content });
+    res.json(result);
+  } catch (err) {
+    console.error('[OBSIDIAN APPEND]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/session/end', async (req, res) => {
+  const { sessionId = 'default' } = req.body;
+  try {
+    const session = sessionStore.get(sessionId);
+    const turns = session ? Math.floor(session.messages.length / 2) : 0;
+    if (turns > 0) {
+      await saveSessionToObsidian(sessionId);
+      res.json({ success: true, saved: true, turns });
+    } else {
+      sessionStore.delete(sessionId);
+      res.json({ success: true, saved: false, turns: 0 });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/actions/run', async (req, res) => {
+  try {
+    const { type, params } = req.body;
+    if (!type) return res.status(400).json({ error: 'type required' });
+    const result = await executeAction({ type, params: params || {} });
+    res.json(result);
+  } catch (err) {
+    console.error('[ACTIONS RUN]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok',
@@ -461,7 +676,7 @@ loadAgents().then(() => {
   app.listen(PORT, () => {
     console.log('');
     console.log('╔════════════════════════════════════════╗');
-    console.log('║  🚀 JARVIS v2.0 - Voice System        ║');
+    console.log('║  🚀 Luma v2.0 - Voice System        ║');
     console.log('╚════════════════════════════════════════╝');
     console.log('');
     console.log(`📍 Server: :${PORT}`);

@@ -1101,7 +1101,7 @@ async function sendMessage(text, fromVoice = false) {
   let ackPromise = null;
 
   try {
-    const body = { message: text, fromVoice, language: currentLang, conclaveEnabled };
+    const body = { message: text, fromVoice, language: currentLang, conclaveEnabled, sessionId: window.lumaSessionId || 'default' };
     if (currentAttachment) {
       body.attachmentId = currentAttachment.id;
       currentAttachment = null;
@@ -3125,7 +3125,7 @@ initRealtimeBtn();
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text })
+        body: JSON.stringify({ message: text, sessionId: window.lumaSessionId || 'default' })
       });
       
       const data = await response.json();
@@ -3237,7 +3237,7 @@ initRealtimeBtn();
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text })
+        body: JSON.stringify({ message: text, sessionId: window.lumaSessionId || 'default' })
       });
       
       const data = await response.json();

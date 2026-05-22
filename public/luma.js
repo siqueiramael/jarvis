@@ -1,3 +1,15 @@
+// Session ID — gerado uma vez por sessão de browser
+if (!window.lumaSessionId) {
+  window.lumaSessionId = 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+}
+
+// Salva sessão ao fechar/sair da página
+window.addEventListener('beforeunload', () => {
+  if (window.lumaSessionId) {
+    navigator.sendBeacon('/api/session/end', JSON.stringify({ sessionId: window.lumaSessionId }));
+  }
+});
+
 // luma.js — Drawer, Status, Header Agent Display
 
 // === DRAWER ===
