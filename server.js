@@ -522,7 +522,17 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
       }
     }
 
-    messages.push({ role: 'user', content: userText });
+    // 7h-2: Orquestração — specialist no pipeline de voz
+    const { id: voiceSpecialistId, cleanMessage: voiceCleanText } = detectIntent(userText);
+    let voiceSpecialistActive = null;
+    if (voiceSpecialistId) {
+      const spec = SPECIALIST_CONTEXTS[voiceSpecialistId];
+      voiceSpecialistActive = { id: voiceSpecialistId, name: spec.name, icon: spec.icon };
+      messages.push({ role: 'system', content: spec.context });
+      console.log(`[PIPELINE] ${spec.icon} ${spec.name} ativado: "${voiceCleanText.substring(0, 50)}"`);
+    }
+
+    messages.push({ role: 'user', content: voiceCleanText });
 
     const llmResp = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
       method: 'POST',
@@ -536,7 +546,7 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     });
 
     const llmData = await llmResp.json();
-    const replyText = llmData.choices?.[0]?.message?.content || 'Erro ao gerar resposta.';
+    const replyText = (llmData.choices?.[0]?.message?.content || 'Erro ao gerar resposta.').replace(/<0x[0-9A-Fa-f]+>/g, ' ').replace(/\s+/g, ' ').trim();
     timings.chat = Date.now() - tChat;
     console.log(`[PIPELINE] CHAT (${timings.chat}ms): "${replyText.substring(0, 80)}..."`);
 
@@ -556,6 +566,7 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     res.setHeader('X-Reply-Text', encodeURIComponent(replyText));
     res.setHeader('X-Reply-Clean', encodeURIComponent(replyClean));
     res.setHeader('X-Agent', currentAgent?.name || 'unknown');
+    res.setHeader('X-Specialist-Active', voiceSpecialistActive ? encodeURIComponent(JSON.stringify(voiceSpecialistActive)) : '');
     res.setHeader('X-Timing-Stt', timings.stt);
     res.setHeader('X-Timing-Chat', timings.chat);
     res.setHeader('X-Timing-Tts', timings.tts);
