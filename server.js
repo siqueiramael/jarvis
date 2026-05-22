@@ -476,7 +476,7 @@ app.post('/api/chat', async (req, res) => {
         model: process.env.LM_STUDIO_MODEL,
         messages,
         temperature: 0.7,
-        max_tokens: 500
+        max_tokens: 800
       })
     });
     const data = await response.json();
