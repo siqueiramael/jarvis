@@ -53,7 +53,7 @@ const SPECIALIST_CONTEXTS = {
   'data-engineer': {
     name: 'Dara', icon: '📊',
     context: 'Modo especialista ativo: Dara (Data Engineer). Mantenha a personalidade da Luma mas aplique expertise em dados e banco de dados. Foque em modelagem de dados, queries eficientes, ETL e integridade.',
-    keywords: ['banco de dados', 'query', 'sql', 'pipeline de dados', 'etl', 'schema', 'tabela', 'índice', 'postgres', 'mysql', 'mongodb', 'migration', 'orm', 'join', 'aggregate']
+    keywords: ['banco de dados', 'query', 'sql', 'pipeline de dados', 'etl', 'schema', 'esquema', 'tabela', 'índice', 'postgres', 'mysql', 'mongodb', 'migration', 'orm', 'join', 'aggregate', 'base de dados', 'modelagem']
   },
   qa: {
     name: 'Quinn', icon: '🔍',
