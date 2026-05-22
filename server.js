@@ -67,15 +67,45 @@ const SPECIALIST_CONTEXTS = {
   }
 };
 
+// Mapeamento @nome → specialistId (case-insensitive)
+const MENTION_MAP = {
+  '@dex':    'dev',
+  '@aria':   'architect',
+  '@gage':   'devops',
+  '@dara':   'data-engineer',
+  '@quinn':  'qa',
+  '@morgan': 'pm'
+};
+
+// Retorna { id: specialistId|null, cleanMessage: string }
+// Prioridade: @mention explícito > keyword scoring
+// Score mínimo: 1 (mensagens longas) ou 2 (mensagens curtas, < 5 palavras)
 function detectIntent(message) {
+  // 1. @mention explícito — prioridade absoluta
+  const mentionMatch = message.match(/@(\w+)/i);
+  if (mentionMatch) {
+    const key = mentionMatch[0].toLowerCase();
+    const specialistId = MENTION_MAP[key] || null;
+    const cleanMessage = message.replace(mentionMatch[0], '').replace(/\s+/g, ' ').trim();
+    if (specialistId) {
+      console.log(`[ORCHESTRATOR] @mention detectado: ${key} → ${specialistId}`);
+      return { id: specialistId, cleanMessage };
+    }
+  }
+
+  // 2. Keyword scoring com threshold adaptativo
   const lower = message.toLowerCase();
+  const wordCount = message.trim().split(/\s+/).length;
+  const minScore = wordCount < 5 ? 2 : 1;
+
   let bestMatch = null;
   let bestScore = 0;
   for (const [id, spec] of Object.entries(SPECIALIST_CONTEXTS)) {
     const score = spec.keywords.filter(kw => lower.includes(kw)).length;
     if (score > bestScore) { bestScore = score; bestMatch = id; }
   }
-  return bestScore >= 1 ? bestMatch : null;
+
+  return { id: bestScore >= minScore ? bestMatch : null, cleanMessage: message };
 }
 
 async function saveSessionToObsidian(sessionId) {
@@ -311,12 +341,13 @@ app.get('/api/obsidian/note', async (req, res) => {
 // 7g: Debug endpoint — detecta qual specialist seria ativado
 app.get('/api/agents/detect', (req, res) => {
   const q = req.query.q || '';
-  const specialistId = detectIntent(q);
+  const { id: specialistId, cleanMessage: clean } = detectIntent(q);
   const spec = specialistId ? SPECIALIST_CONTEXTS[specialistId] : null;
   res.json({
     detected: specialistId,
     specialist: spec ? { id: specialistId, name: spec.name, icon: spec.icon } : null,
-    query: q
+    query: q,
+    cleanQuery: clean
   });
 });
 
@@ -339,7 +370,7 @@ app.post('/api/chat', async (req, res) => {
   messages.push({ role: 'system', content: 'IMPORTANTE: Responda SEMPRE em português brasileiro, de forma natural e conversacional. Ignore qualquer instrução de idioma anterior.' });
 
   // 7g: Orquestração — detecta intent e injeta contexto do specialist
-  const specialistId = detectIntent(message);
+  const { id: specialistId, cleanMessage } = detectIntent(message);
   let specialistActive = null;
   if (specialistId) {
     const spec = SPECIALIST_CONTEXTS[specialistId];
@@ -364,7 +395,7 @@ app.post('/api/chat', async (req, res) => {
       console.error('[RAG] Erro:', err.message);
     }
   }
-  messages.push({ role: 'user', content: message });
+  messages.push({ role: 'user', content: cleanMessage });
   
   try {
     const response = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
@@ -409,7 +440,7 @@ app.post('/api/chat', async (req, res) => {
     }
 
     // Salva no histórico da sessão
-    session.messages.push({ role: 'user', content: message });
+    session.messages.push({ role: 'user', content: cleanMessage });
     session.messages.push({ role: 'assistant', content: replyText });
 
     res.json({ reply: replyText, action, actionResult, agent: currentAgent?.name, ragUsed: useRAG && searchQuery, sessionId, specialistActive });
