@@ -27,7 +27,7 @@ const VAULT_PATH = join(__dirname, 'data/obsidian-vault');
 const WHISPER_PATH = join(__dirname, 'whisper.cpp/build/bin/whisper-cli');
 const WHISPER_MODEL = join(__dirname, 'whisper.cpp/models/ggml-medium.bin');
 const PIPER_PATH = join(__dirname, 'piper-tts/piper');
-const PIPER_MODEL = join(__dirname, 'piper-tts/pt_BR-cadu-medium.onnx');
+const PIPER_MODEL = join(__dirname, 'piper-tts/pt_BR-faber-medium.onnx');
 
 // [Código anterior de loadAgents, searchNotes, readNote...]
 async function loadAgents() {
@@ -87,75 +87,32 @@ async function readNote(notePath) {
 // VOICE ENDPOINTS
 // ============================================
 
-// ============================================
-// STT helper: chama Whisper Windows (GPU) com fallback pro whisper.cpp local
-// ============================================
-async function transcribeAudio(audioPath, language = 'pt') {
-  const whisperUrl = process.env.WHISPER_URL;
-
-  // Caminho A: Whisper Windows (preferencial — GPU)
-  if (whisperUrl) {
-    try {
-      const { readFile } = await import('fs/promises');
-      const path = await import('path');
-
-      // Ler arquivo em buffer e criar Blob (FormData nativo Node 18+)
-      const buffer = await readFile(audioPath);
-      const blob = new Blob([buffer], { type: 'audio/wav' });
-
-      const form = new FormData();
-      form.append('audio', blob, path.basename(audioPath));
-      form.append('language', language);
-
-      const resp = await fetch(`${whisperUrl}/transcribe`, {
-        method: 'POST',
-        body: form,
-        signal: AbortSignal.timeout(60000)
-      });
-
-      if (resp.ok) {
-        const data = await resp.json();
-        console.log(`[STT-Windows] ${data.elapsed_ms}ms → "${data.text.substring(0, 60)}..."`);
-        return { text: data.text || '', source: 'windows-gpu', elapsed: data.elapsed_ms };
-      } else {
-        const errBody = await resp.text().catch(() => 'no body');
-        console.error('[STT-Windows] HTTP', resp.status, 'body:', errBody.substring(0, 300), '— caindo para fallback CPU');
-      }
-    } catch (err) {
-      console.error('[STT-Windows] Falhou:', err.message, '— caindo para fallback CPU');
-    }
-  }
-
-  // Caminho B: whisper.cpp local (fallback)
-  console.log('[STT-Local] Usando whisper.cpp CPU (lento)');
-  // Converter pra WAV 16k mono primeiro
-  const wavPath = `${audioPath}.wav`;
-  await execAsync(`ffmpeg -y -i ${audioPath} -ar 16000 -ac 1 -c:a pcm_s16le ${wavPath} 2>&1`);
-
-  const { stdout } = await execAsync(
-    `${WHISPER_PATH} -m ${WHISPER_MODEL} -f ${wavPath} --language ${language} --no-timestamps`
-  );
-
-  const { unlink } = await import('fs/promises');
-  await unlink(wavPath).catch(() => {});
-
-  const lines = stdout.split('\n');
-  const text = (lines.find(l => l.trim() && !l.includes('[') && !l.includes('whisper_')) || '').trim();
-  return { text, source: 'cpu-local', elapsed: null };
-}
-
 // STT: Audio → Text
 app.post('/api/voice/stt', upload.single('audio'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No audio file' });
-
+    if (!req.file) {
+      return res.status(400).json({ error: 'No audio file' });
+    }
+    
     const audioPath = req.file.path;
     console.log(`[STT] Processing: ${audioPath}`);
-
-    const result = await transcribeAudio(audioPath, 'pt');
-    await unlink(audioPath).catch(() => {});
-
-    res.json({ text: result.text, source: result.source, elapsed_ms: result.elapsed });
+    
+    // Executar Whisper
+    const { stdout } = await execAsync(
+      `${WHISPER_PATH} -m ${WHISPER_MODEL} -f ${audioPath} --language pt --no-timestamps`
+    );
+    
+    // Extrair texto do output
+    const lines = stdout.split('\n');
+    const textLine = lines.find(l => l.trim() && !l.includes('[') && !l.includes('whisper_'));
+    const text = textLine ? textLine.trim() : '';
+    
+    // Limpar arquivo temporário
+    await unlink(audioPath);
+    
+    console.log(`[STT] Result: ${text}`);
+    res.json({ text });
+    
   } catch (err) {
     console.error('[STT] Error:', err.message);
     res.status(500).json({ error: err.message });
@@ -170,13 +127,18 @@ app.post('/api/voice/tts', async (req, res) => {
       return res.status(400).json({ error: 'No text provided' });
     }
     
-    const outputPath = `/tmp/tts-${Date.now()}.mp3`;
-    console.log(`[TTS] Generating (edge-tts): ${text.substring(0, 50)}...`);
-    const textSafe = text.replace(/"/g, '\\"');
-    await execAsync(`edge-tts --voice "pt-BR-FranciscaNeural" --text "${textSafe}" --write-media ${outputPath}`);
-    res.setHeader('Content-Type', 'audio/mpeg');
+    const outputPath = `/tmp/tts-${Date.now()}.wav`;
+    console.log(`[TTS] Generating: ${text.substring(0, 50)}...`);
+    
+    // Executar Piper
+    await execAsync(
+      `echo "${text}" | ${PIPER_PATH} --model ${PIPER_MODEL} --output_file ${outputPath}`
+    );
+    
+    // Enviar áudio
     res.sendFile(outputPath, async (err) => {
       if (err) console.error('[TTS] Send error:', err);
+      // Limpar arquivo após envio
       try { await unlink(outputPath); } catch {}
     });
     
@@ -230,8 +192,6 @@ app.post('/api/chat', async (req, res) => {
   if (currentAgent?.systemPrompt) {
     messages.push({ role: 'system', content: currentAgent.systemPrompt });
   }
-  // Luma: forçar resposta em pt-BR independente do system prompt do agente
-  messages.push({ role: 'system', content: 'IMPORTANTE: Responda SEMPRE em português brasileiro, de forma natural e conversacional. Ignore qualquer instrução de idioma anterior.' });
   if (useRAG && searchQuery) {
     try {
       const results = await searchNotes(searchQuery);
@@ -263,25 +223,6 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-
-// Limpa texto pra TTS: remove emojis, markdown, code blocks, limita tamanho
-function sanitizeForTTS(text, maxLen = 500) {
-  let t = text || '';
-  t = t.replace(/```[\s\S]*?```/g, ''); // code blocks
-  t = t.replace(/`[^`]*`/g, ''); // inline code
-  t = t.replace(/[*_~#>]/g, ''); // markdown chars
-  t = t.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1'); // links
-  t = t.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ''); // emojis
-  t = t.replace(/<0x[0-9A-Fa-f]+>/g, ''); // bytes weird
-  t = t.replace(/\n+/g, '. ').replace(/\s+/g, ' ').trim();
-  if (t.length > maxLen) {
-    const cut = t.substring(0, maxLen);
-    const lastDot = cut.lastIndexOf('.');
-    t = lastDot > maxLen * 0.6 ? cut.substring(0, lastDot + 1) : cut + '...';
-  }
-  return t;
-}
-
 // ============================================
 // VOICE PIPELINE: STT → CHAT → TTS (tudo em um)
 // ============================================
@@ -298,14 +239,16 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     const useRAG = req.body.useRAG === 'true';
     const searchQuery = req.body.searchQuery || '';
 
-    // ─── 1. STT (via helper: Windows GPU preferencial) ───
+    // ─── 1. STT ───
     const tStt = Date.now();
     console.log(`[PIPELINE] STT processando: ${audioPath}`);
 
-    const sttResult = await transcribeAudio(audioPath, 'pt');
-    const userText = sttResult.text;
+    const { stdout: sttOut } = await execAsync(
+      `${WHISPER_PATH} -m ${WHISPER_MODEL} -f ${audioPath} --language pt --no-timestamps`
+    );
+    const sttLines = sttOut.split('\n');
+    const userText = (sttLines.find(l => l.trim() && !l.includes('[') && !l.includes('whisper_')) || '').trim();
     timings.stt = Date.now() - tStt;
-    timings.sttSource = sttResult.source;
 
     await unlink(audioPath).catch(() => {});
 
@@ -318,11 +261,9 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     const tChat = Date.now();
     const messages = [];
 
-    // Modo voz: prompt curto e conversacional (não usa system prompt do agente)
-    messages.push({
-      role: 'system',
-      content: 'Você é a Luma, assistente pessoal por voz em português brasileiro. Responda de forma curta, natural e conversacional. NÃO use markdown, emojis, código ou listas. Máximo 2-3 frases curtas.'
-    });
+    if (currentAgent?.systemPrompt) {
+      messages.push({ role: 'system', content: currentAgent.systemPrompt });
+    }
 
     if (useRAG && searchQuery) {
       try {
@@ -356,19 +297,20 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
 
     // ─── 3. TTS ───
     const tTts = Date.now();
-    const ttsPath = `/tmp/pipeline-${Date.now()}.mp3`;
-    const replyClean = sanitizeForTTS(replyText, 500);
-    const ttsTextEscaped = replyClean.replace(/"/g, '\\"');
-    await execAsync(`edge-tts --voice "pt-BR-FranciscaNeural" --text "${ttsTextEscaped}" --write-media ${ttsPath}`);
+    const ttsPath = `/tmp/pipeline-${Date.now()}.wav`;
+    const ttsTextEscaped = replyText.replace(/"/g, '\\"').replace(/\n/g, ' ').substring(0, 1000);
+
+    await execAsync(
+      `echo "${ttsTextEscaped}" | ${PIPER_PATH} --model ${PIPER_MODEL} --output_file ${ttsPath}`
+    );
     timings.tts = Date.now() - tTts;
     timings.total = Date.now() - t0;
     console.log(`[PIPELINE] TTS (${timings.tts}ms) — TOTAL ${timings.total}ms`);
 
     // Enviar metadados nos headers + WAV no body
-    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Type', 'audio/wav');
     res.setHeader('X-User-Text', encodeURIComponent(userText));
     res.setHeader('X-Reply-Text', encodeURIComponent(replyText));
-    res.setHeader('X-Reply-Clean', encodeURIComponent(replyClean));
     res.setHeader('X-Agent', currentAgent?.name || 'unknown');
     res.setHeader('X-Timing-Stt', timings.stt);
     res.setHeader('X-Timing-Chat', timings.chat);
@@ -385,64 +327,6 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     res.status(500).json({ error: err.message, timings });
   }
 });
-
-
-// ─── LOCAL AGENT (Phase 7a) ──────────────────────────────────────────────
-async function callAgent(endpoint, payload = null) {
-  const agentUrl = process.env.JARVIS_AGENT_URL;
-  const agentToken = process.env.JARVIS_AGENT_TOKEN;
-  if (!agentUrl) throw new Error('JARVIS_AGENT_URL not configured');
-  const resp = await fetch(`${agentUrl}${endpoint}`, {
-    method: payload ? 'POST' : 'GET',
-    headers: { 'Content-Type': 'application/json', 'x-agent-token': agentToken },
-    ...(payload && { body: JSON.stringify(payload) })
-  });
-  if (!resp.ok) throw new Error(`Agent ${resp.status}: ${await resp.text()}`);
-  return resp.json();
-}
-
-app.post('/api/agent/execute', async (req, res) => {
-  try {
-    const { cmd, timeout = 30 } = req.body;
-    if (!cmd) return res.status(400).json({ error: 'cmd required' });
-    const result = await callAgent('/execute/shell', { cmd, timeout });
-    res.json(result);
-  } catch (err) {
-    console.error('[AGENT]', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/agent/screenshot', async (req, res) => {
-  try {
-    const result = await callAgent('/capture/screenshot');
-    res.json(result);
-  } catch (err) {
-    console.error('[AGENT]', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/agent/file/read', async (req, res) => {
-  try {
-    const { path } = req.body;
-    if (!path) return res.status(400).json({ error: 'path required' });
-    res.json(await callAgent('/filesystem/read', { path }));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/agent/file/list', async (req, res) => {
-  try {
-    const { path } = req.body;
-    if (!path) return res.status(400).json({ error: 'path required' });
-    res.json(await callAgent('/filesystem/list', { path }));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-// ─────────────────────────────────────────────────────────────────────────────
 
 app.get('/api/health', (req, res) => {
   res.json({ 
