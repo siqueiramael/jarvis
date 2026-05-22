@@ -485,6 +485,9 @@ app.post('/api/chat', async (req, res) => {
       }
     } catch { /* resposta normal em texto */ }
 
+    // Limpa tokens hex do LLM (ex: <0x0A> → espaço)
+    replyText = replyText.replace(/<0x[0-9A-Fa-f]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
     // Executa action se existir
     if (action) {
       actionResult = await executeAction(action);
