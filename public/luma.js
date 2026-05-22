@@ -59,23 +59,130 @@ async function checkStatus() {
 document.addEventListener('DOMContentLoaded', () => {
   setTimeout(checkStatus, 800);
   setInterval(checkStatus, 30000);
+
+  // 7j-B: inicializa badge clicável sem esperar primeira mensagem
+  setTimeout(function() {
+    const display = document.getElementById('current-agent-display');
+    if (display && !display.dataset.pickerBound) {
+      display.style.cursor = 'pointer';
+      display.title = 'Clique para escolher specialist';
+      display.addEventListener('click', function(e) {
+        e.stopPropagation();
+        const picker = document.getElementById('specialist-picker');
+        if (picker) { closeSpecialistPicker(); return; }
+        openSpecialistPicker();
+      });
+      display.dataset.pickerBound = '1';
+    }
+  }, 500);
 });
 
-// === SPECIALIST BADGE — 7g ===
+// === SPECIALIST BADGE + PICKER — 7j-B ===
+const SPECIALIST_OPTIONS = [
+  { id: 'dev',           mention: '@dex',    icon: '💻', name: 'Dex',    role: 'Dev Engineer'  },
+  { id: 'architect',     mention: '@aria',   icon: '🏛️', name: 'Aria',   role: 'Architect'     },
+  { id: 'devops',        mention: '@gage',   icon: '⚡', name: 'Gage',   role: 'DevOps'        },
+  { id: 'data-engineer', mention: '@dara',   icon: '📊', name: 'Dara',   role: 'Data Engineer' },
+  { id: 'qa',            mention: '@quinn',  icon: '🔍', name: 'Quinn',  role: 'QA'            },
+  { id: 'pm',            mention: '@morgan', icon: '📋', name: 'Morgan', role: 'PM'            },
+];
+
 window.updateSpecialistBadge = function(specialist) {
   const display = document.getElementById('current-agent-display');
   if (!display) return;
+
+  // Torna o badge clicável na primeira chamada
+  if (!display.dataset.pickerBound) {
+    display.style.cursor = 'pointer';
+    display.title = 'Clique para escolher specialist';
+    display.addEventListener('click', function(e) {
+      e.stopPropagation();
+      const picker = document.getElementById('specialist-picker');
+      if (picker) { closeSpecialistPicker(); return; }
+      openSpecialistPicker();
+    });
+    display.dataset.pickerBound = '1';
+  }
+
   if (specialist) {
-    display.textContent = 'Luma [' + specialist.icon + ' ' + specialist.name + ']';
-    display.title = 'Modo especialista: ' + specialist.name;
-    display.style.opacity = '0.85';
+    const persisted = specialist.persisted === true;
+    display.textContent = 'Luma [' + specialist.icon + ' ' + specialist.name + (persisted ? ' ~' : '') + ']';
+    display.title = (persisted ? 'Persistindo: ' : 'Modo especialista: ') + specialist.name + ' — clique para trocar';
+    display.style.opacity = persisted ? '0.65' : '0.85';
+    display.dataset.specialistId = specialist.id;
   } else {
     const active = document.querySelector('.aiox-agent.active .aiox-name');
     display.textContent = active ? active.textContent : 'Luma';
-    display.title = '';
+    display.title = 'Clique para escolher specialist';
     display.style.opacity = '';
+    display.dataset.specialistId = '';
   }
 };
+
+function openSpecialistPicker() {
+  const display = document.getElementById('current-agent-display');
+  if (!display) return;
+
+  const picker = document.createElement('div');
+  picker.id = 'specialist-picker';
+  picker.className = 'specialist-picker';
+
+  // Posiciona via fixed usando bounding rect do badge
+  const rect = display.getBoundingClientRect();
+  picker.style.position = 'fixed';
+  picker.style.top = (rect.bottom + 8) + 'px';
+  picker.style.right = (window.innerWidth - rect.right) + 'px';
+  picker.style.left = 'auto';
+  picker.style.transform = 'none';
+
+  // Opção: limpar (Luma geral)
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'sp-option sp-clear';
+  clearBtn.innerHTML = '<span class="sp-icon">✦</span><span class="sp-info"><span class="sp-name">Luma</span><span class="sp-role">Geral</span></span>';
+  clearBtn.addEventListener('click', function() {
+    closeSpecialistPicker();
+    document.getElementById('chat-mini-input')?.focus();
+  });
+  picker.appendChild(clearBtn);
+
+  // Opções de specialists
+  SPECIALIST_OPTIONS.forEach(function(opt) {
+    const btn = document.createElement('button');
+    btn.className = 'sp-option';
+    if (display.dataset.specialistId === opt.id) {
+      btn.classList.add('sp-active');
+    }
+    btn.innerHTML = '<span class="sp-icon">' + opt.icon + '</span><span class="sp-info"><span class="sp-name">' + opt.name + '</span><span class="sp-role">' + opt.role + '</span></span>';
+    btn.addEventListener('click', function() {
+      const input = document.getElementById('chat-mini-input');
+      if (input) {
+        const clean = input.value.replace(/^@\w+\s*/, '').trim();
+        input.value = opt.mention + (clean ? ' ' + clean : ' ');
+        input.focus();
+        input.setSelectionRange(input.value.length, input.value.length);
+      }
+      closeSpecialistPicker();
+    });
+    picker.appendChild(btn);
+  });
+
+  document.body.appendChild(picker);
+
+  // Fecha ao clicar fora
+  setTimeout(function() {
+    document.addEventListener('click', function handler(e) {
+      if (!e.target.closest('#specialist-picker') && !e.target.closest('.header-agent-pill') && e.target !== display) {
+        closeSpecialistPicker();
+        document.removeEventListener('click', handler);
+      }
+    });
+  }, 50);
+}
+
+function closeSpecialistPicker() {
+  const p = document.getElementById('specialist-picker');
+  if (p) p.remove();
+}
 
 // === AUTO-SCROLL ===
 const chatOut = document.getElementById('chat-mini-output');
