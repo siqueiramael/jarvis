@@ -562,6 +562,15 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     const useRAG = req.body.useRAG === 'true';
     const searchQuery = req.body.searchQuery || '';
 
+    // 7l-B: Sessão de voz — init ou recupera
+    const rawSid = req.body.sessionId;
+    const voiceSessionId = Array.isArray(rawSid) ? rawSid[0] : (rawSid || 'voice-default');
+    if (!sessionStore.has(voiceSessionId)) {
+      sessionStore.set(voiceSessionId, { messages: [], specialistHistory: [], lastActivity: Date.now(), agentId: 'voice' });
+    }
+    const voiceSession = sessionStore.get(voiceSessionId);
+    voiceSession.lastActivity = Date.now();
+
     // ─── 1. STT (via helper: Windows GPU preferencial) ───
     const tStt = Date.now();
     console.log(`[PIPELINE] STT processando: ${audioPath}`);
@@ -620,6 +629,12 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
       console.log(`[PIPELINE] 🔮 Conclave (${names}) ativado: "${voiceCleanText.substring(0, 50)}"`);
     }
 
+    // 7l-B: Injeta histórico da sessão de voz (últimas N mensagens)
+    if (voiceSession.messages.length > 0) {
+      const voiceHistory = voiceSession.messages.slice(-SESSION_MAX_HISTORY);
+      messages.push(...voiceHistory);
+    }
+
     messages.push({ role: 'user', content: voiceCleanText });
 
     const llmResp = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
@@ -637,6 +652,13 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     const replyText = (llmData.choices?.[0]?.message?.content || 'Erro ao gerar resposta.').replace(/<0x[0-9A-Fa-f]+>/g, ' ').replace(/\s+/g, ' ').trim();
     timings.chat = Date.now() - tChat;
     console.log(`[PIPELINE] CHAT (${timings.chat}ms): "${replyText.substring(0, 80)}..."`);
+
+    // 7l-B: Salva turno no histórico da sessão de voz
+    voiceSession.messages.push({ role: 'user', content: voiceCleanText });
+    voiceSession.messages.push({ role: 'assistant', content: replyText });
+    if (!voiceSession.specialistHistory) voiceSession.specialistHistory = [];
+    voiceSession.specialistHistory.push(voiceSpecialistActive?.id || null);
+    if (voiceSession.specialistHistory.length > 10) voiceSession.specialistHistory = voiceSession.specialistHistory.slice(-10);
 
     // ─── 3. TTS ───
     const tTts = Date.now();
