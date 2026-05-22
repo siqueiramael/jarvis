@@ -31,6 +31,53 @@ const sessionStore = new Map();
 const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 min idle → auto-save
 const SESSION_MAX_HISTORY = 20; // últimas 20 mensagens no contexto
 
+// ============================================
+// SPECIALIST CONTEXTS — 7g Orquestração
+// ============================================
+const SPECIALIST_CONTEXTS = {
+  dev: {
+    name: 'Dex', icon: '💻',
+    context: 'Modo especialista ativo: Dex (Dev Engineer). Mantenha a personalidade da Luma mas aplique expertise técnica sênior de engenharia de software. Seja extremamente preciso em código, use terminologia de engenharia, foque em soluções práticas, considere edge cases, boas práticas e performance.',
+    keywords: ['código', 'bug', 'função', 'implementa', 'programa', 'script', 'erro no código', 'refatora', 'debugar', 'variável', 'classe', 'método', 'typescript', 'javascript', 'python', 'react', 'node', 'npm', 'dependência', 'lint', 'compilar', 'syntax', 'import', 'export', 'endpoint', 'api route', 'middleware']
+  },
+  architect: {
+    name: 'Aria', icon: '🏛️',
+    context: 'Modo especialista ativo: Aria (Architect). Mantenha a personalidade da Luma mas aplique visão holística de arquitetura de sistemas. Pense em trade-offs, escalabilidade, padrões de design, stack tecnológica e decisões estruturais de longo prazo.',
+    keywords: ['arquitetura', 'design de sistema', 'estrutura do projeto', 'escalabilidade', 'microserviço', 'monolito', 'padrão de design', 'stack tecnológica', 'decisão técnica', 'diagrama de sistema', 'componente', 'módulo', 'separação de responsabilidades']
+  },
+  devops: {
+    name: 'Gage', icon: '⚡',
+    context: 'Modo especialista ativo: Gage (DevOps). Mantenha a personalidade da Luma mas aplique expertise em operações e infraestrutura. Foque em confiabilidade, deploy, configuração de servidores, containers e automação.',
+    keywords: ['deploy', 'docker', 'nginx', 'servidor', 'ci/cd', 'pipeline', 'container', 'compose', 'kubernetes', 'vps', 'configuração de servidor', 'systemd', 'firewall', 'ssl', 'tailscale', 'proxy', 'reverse proxy', 'cron']
+  },
+  'data-engineer': {
+    name: 'Dara', icon: '📊',
+    context: 'Modo especialista ativo: Dara (Data Engineer). Mantenha a personalidade da Luma mas aplique expertise em dados e banco de dados. Foque em modelagem de dados, queries eficientes, ETL e integridade.',
+    keywords: ['banco de dados', 'query', 'sql', 'pipeline de dados', 'etl', 'schema', 'tabela', 'índice', 'postgres', 'mysql', 'mongodb', 'migration', 'orm', 'join', 'aggregate']
+  },
+  qa: {
+    name: 'Quinn', icon: '🔍',
+    context: 'Modo especialista ativo: Quinn (QA). Mantenha a personalidade da Luma mas aplique expertise em qualidade e testes. Foque em cobertura, edge cases, estratégias de teste e prevenção de regressão.',
+    keywords: ['teste', 'qualidade', 'review de código', 'validação', 'cobertura', 'unit test', 'e2e', 'jest', 'cypress', 'test case', 'assert', 'mock', 'stub']
+  },
+  pm: {
+    name: 'Morgan', icon: '📋',
+    context: 'Modo especialista ativo: Morgan (PM). Mantenha a personalidade da Luma mas aplique expertise em gestão de produto. Foque em priorização, valor de negócio, roadmap e comunicação clara.',
+    keywords: ['roadmap', 'sprint', 'backlog', 'planejamento de projeto', 'épico', 'user story', 'prioridade', 'entrega', 'stakeholder', 'kpi', 'okr']
+  }
+};
+
+function detectIntent(message) {
+  const lower = message.toLowerCase();
+  let bestMatch = null;
+  let bestScore = 0;
+  for (const [id, spec] of Object.entries(SPECIALIST_CONTEXTS)) {
+    const score = spec.keywords.filter(kw => lower.includes(kw)).length;
+    if (score > bestScore) { bestScore = score; bestMatch = id; }
+  }
+  return bestScore >= 1 ? bestMatch : null;
+}
+
 async function saveSessionToObsidian(sessionId) {
   const session = sessionStore.get(sessionId);
   if (!session || session.messages.length === 0) return;
@@ -261,6 +308,18 @@ app.get('/api/obsidian/note', async (req, res) => {
   }
 });
 
+// 7g: Debug endpoint — detecta qual specialist seria ativado
+app.get('/api/agents/detect', (req, res) => {
+  const q = req.query.q || '';
+  const specialistId = detectIntent(q);
+  const spec = specialistId ? SPECIALIST_CONTEXTS[specialistId] : null;
+  res.json({
+    detected: specialistId,
+    specialist: spec ? { id: specialistId, name: spec.name, icon: spec.icon } : null,
+    query: q
+  });
+});
+
 app.post('/api/chat', async (req, res) => {
   const { message, useRAG = false, searchQuery, sessionId = 'default' } = req.body;
   if (!message) return res.status(400).json({ error: 'Message required' });
@@ -278,6 +337,16 @@ app.post('/api/chat', async (req, res) => {
   }
   // Luma: forçar resposta em pt-BR independente do system prompt do agente
   messages.push({ role: 'system', content: 'IMPORTANTE: Responda SEMPRE em português brasileiro, de forma natural e conversacional. Ignore qualquer instrução de idioma anterior.' });
+
+  // 7g: Orquestração — detecta intent e injeta contexto do specialist
+  const specialistId = detectIntent(message);
+  let specialistActive = null;
+  if (specialistId) {
+    const spec = SPECIALIST_CONTEXTS[specialistId];
+    specialistActive = { id: specialistId, name: spec.name, icon: spec.icon };
+    messages.push({ role: 'system', content: spec.context });
+    console.log(`[ORCHESTRATOR] ${spec.icon} ${spec.name} ativado: "${message.substring(0, 50)}"`);
+  }
 
   // Historico da sessao
   if (session.messages.length > 0) {
@@ -343,7 +412,7 @@ app.post('/api/chat', async (req, res) => {
     session.messages.push({ role: 'user', content: message });
     session.messages.push({ role: 'assistant', content: replyText });
 
-    res.json({ reply: replyText, action, actionResult, agent: currentAgent?.name, ragUsed: useRAG && searchQuery, sessionId });
+    res.json({ reply: replyText, action, actionResult, agent: currentAgent?.name, ragUsed: useRAG && searchQuery, sessionId, specialistActive });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

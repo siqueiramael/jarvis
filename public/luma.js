@@ -61,6 +61,22 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(checkStatus, 30000);
 });
 
+// === SPECIALIST BADGE — 7g ===
+window.updateSpecialistBadge = function(specialist) {
+  const display = document.getElementById('current-agent-display');
+  if (!display) return;
+  if (specialist) {
+    display.textContent = 'Luma [' + specialist.icon + ' ' + specialist.name + ']';
+    display.title = 'Modo especialista: ' + specialist.name;
+    display.style.opacity = '0.85';
+  } else {
+    const active = document.querySelector('.aiox-agent.active .aiox-name');
+    display.textContent = active ? active.textContent : 'Luma';
+    display.title = '';
+    display.style.opacity = '';
+  }
+};
+
 // === AUTO-SCROLL ===
 const chatOut = document.getElementById('chat-mini-output');
 if (chatOut) {

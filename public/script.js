@@ -3136,6 +3136,7 @@ initRealtimeBtn();
       }
       
       // Adicionar resposta
+      if (window.updateSpecialistBadge) window.updateSpecialistBadge(data.specialistActive || null);
       if (data.reply) {
         addTerminalLineV2(data.reply, 'jarvis-line');
       } else if (data.error) {
@@ -3248,6 +3249,7 @@ initRealtimeBtn();
       }
       
       // Adicionar resposta
+      if (window.updateSpecialistBadge) window.updateSpecialistBadge(data.specialistActive || null);
       if (data.reply) {
         addMiniLine(data.reply, 'assistant');
       } else if (data.error) {
