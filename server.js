@@ -103,7 +103,11 @@ function detectIntent(message) {
 
   const matches = [];
   for (const [id, spec] of Object.entries(SPECIALIST_CONTEXTS)) {
-    const score = spec.keywords.filter(kw => lower.includes(kw)).length;
+    const score = spec.keywords.filter(kw => {
+      // Multi-word keywords: substring exato; single-word: word boundary
+      if (kw.includes(' ')) return lower.includes(kw);
+      return new RegExp('\\b' + kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(lower);
+    }).length;
     if (score >= minScore) matches.push({ id, score });
   }
   matches.sort((a, b) => b.score - a.score);
@@ -398,7 +402,7 @@ app.post('/api/chat', async (req, res) => {
 
   // Sessao: pega ou cria
   if (!sessionStore.has(sessionId)) {
-    sessionStore.set(sessionId, { messages: [], lastActivity: Date.now(), agentId: currentAgent?.id });
+    sessionStore.set(sessionId, { messages: [], specialistHistory: [], lastActivity: Date.now(), agentId: currentAgent?.id });
   }
   const session = sessionStore.get(sessionId);
   session.lastActivity = Date.now();
@@ -412,14 +416,30 @@ app.post('/api/chat', async (req, res) => {
 
   // 7i: Orquestração multi-intent — specialist único ou Conclave
   const { matches, cleanMessage } = detectIntent(message);
-  const orch = resolveOrchestration(matches);
+  let orch = resolveOrchestration(matches);
   let specialistActive = null;
+
+  // 7j-A: Persistência — se generic, verifica últimas 3 msgs da sessão
+  const PERSISTENCE_WINDOW = 3;
+  if (orch.mode === 'generic' && session.specialistHistory?.length >= PERSISTENCE_WINDOW) {
+    const recent = session.specialistHistory.slice(-PERSISTENCE_WINDOW);
+    const allSame = recent.every(id => id && id === recent[0] && id !== 'conclave');
+    if (allSame) {
+      const persistedId = recent[0];
+      const spec = SPECIALIST_CONTEXTS[persistedId];
+      if (spec) {
+        orch = { mode: 'specialist', specialist: { id: persistedId, ...spec } };
+        console.log(`[ORCHESTRATOR] 🔁 ${spec.icon} ${spec.name} persistido (${PERSISTENCE_WINDOW} msgs consecutivas)`);
+      }
+    }
+  }
 
   if (orch.mode === 'specialist') {
     const spec = orch.specialist;
-    specialistActive = { id: spec.id, name: spec.name, icon: spec.icon };
+    const isPersisted = matches.length === 0; // chegou aqui sem keyword → é persistência
+    specialistActive = { id: spec.id, name: spec.name, icon: spec.icon, persisted: isPersisted };
     messages.push({ role: 'system', content: spec.context });
-    console.log(`[ORCHESTRATOR] ${spec.icon} ${spec.name} ativado: "${message.substring(0, 50)}"`);
+    if (!isPersisted) console.log(`[ORCHESTRATOR] ${spec.icon} ${spec.name} ativado: "${message.substring(0, 50)}"`);
   } else if (orch.mode === 'conclave') {
     const names = orch.specialists.map(s => s.name).join(' + ');
     specialistActive = { id: 'conclave', name: 'Conclave', icon: '🔮', specialists: orch.specialists.map(s => s.id) };
@@ -496,6 +516,10 @@ app.post('/api/chat', async (req, res) => {
     // Salva no histórico da sessão
     session.messages.push({ role: 'user', content: cleanMessage });
     session.messages.push({ role: 'assistant', content: replyText });
+    // 7j-A: Registra specialist usado nesta mensagem
+    if (!session.specialistHistory) session.specialistHistory = [];
+    session.specialistHistory.push(specialistActive?.id && !specialistActive.persisted ? specialistActive.id : (specialistActive?.persisted ? specialistActive.id : null));
+    if (session.specialistHistory.length > 10) session.specialistHistory = session.specialistHistory.slice(-10);
 
     res.json({ reply: replyText, action, actionResult, agent: currentAgent?.name, ragUsed: useRAG && searchQuery, sessionId, specialistActive });
   } catch (err) {
