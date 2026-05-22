@@ -118,6 +118,35 @@ function detectIntent(message) {
 // Prompt de síntese injetado no Conclave após os contextos individuais
 const CONCLAVE_CONTEXT = 'Modo Conclave ativo: múltiplos especialistas foram detectados. As perspectivas de cada um já foram injetadas acima. Sintetize uma resposta integrada que combine os insights de todas as áreas — não escolha apenas um ponto de vista. Identifique onde as perspectivas se complementam ou divergem e entregue uma análise holística. Mantenha a personalidade da Luma.';
 
+// Classificador LLM — system prompt com few-shot examples
+const CLASSIFIER_SYSTEM = 'Classifique mensagens em categorias técnicas. Retorne SOMENTE um JSON array, sem markdown, sem explicação.\nCategorias: dev, architect, devops, data-engineer, qa, pm\nSe não for técnico: []\n\nExemplos:\n"bug no código" → ["dev"]\n"deploy no servidor" → ["devops"]\n"schema do banco" → ["data-engineer"]\n"escalabilidade da arquitetura" → ["architect"]\n"oi tudo bem" → []\n"schema do banco para escalar" → ["data-engineer","architect"]';
+
+// Classificação via LLM quando keyword score é ambíguo (score = 1)
+async function classifyWithLLM(message) {
+  try {
+    const resp = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.CLASSIFIER_MODEL,
+        messages: [
+          { role: 'system', content: CLASSIFIER_SYSTEM },
+          { role: 'user', content: message }
+        ],
+        max_tokens: 30,
+        temperature: 0
+      })
+    });
+    const data = await resp.json();
+    const raw = (data.choices?.[0]?.message?.content || '[]').replace(/```json|```/g, '').trim();
+    const ids = JSON.parse(raw);
+    return ids.filter(id => SPECIALIST_CONTEXTS[id]).map(id => ({ id, score: 2 }));
+  } catch (e) {
+    console.error('[CLASSIFIER] Erro:', e.message);
+    return null; // fallback: usa resultado keyword
+  }
+}
+
 // Resolve o modo de orquestração: 'generic' | 'specialist' | 'conclave'
 function resolveOrchestration(matches) {
   if (matches.length === 0)
@@ -414,9 +443,17 @@ app.post('/api/chat', async (req, res) => {
   // Luma: forçar resposta em pt-BR independente do system prompt do agente
   messages.push({ role: 'system', content: 'IMPORTANTE: Responda SEMPRE em português brasileiro, de forma natural e conversacional. Ignore qualquer instrução de idioma anterior.' });
 
-  // 7i: Orquestração multi-intent — specialist único ou Conclave
+  // 7l-C: Orquestração híbrida — keyword + LLM classifier para score ambíguo
   const { matches, cleanMessage } = detectIntent(message);
-  let orch = resolveOrchestration(matches);
+  let finalMatches = matches;
+  if (process.env.CLASSIFIER_MODEL && matches.length === 1 && matches[0].score === 1) {
+    const llmMatches = await classifyWithLLM(cleanMessage);
+    if (llmMatches !== null) {
+      finalMatches = llmMatches;
+      console.log(`[ORCHESTRATOR] 🤖 LLM classificou: [${finalMatches.map(m=>m.id).join(', ')}]`);
+    }
+  }
+  let orch = resolveOrchestration(finalMatches);
   let specialistActive = null;
 
   // 7j-A: Persistência — se generic, verifica últimas 3 msgs da sessão
@@ -450,9 +487,11 @@ app.post('/api/chat', async (req, res) => {
     console.log(`[ORCHESTRATOR] 🔮 Conclave (${names}) ativado: "${message.substring(0, 50)}"`);
   }
 
-  // Historico da sessao
+  // Historico da sessao (filtra mensagens vazias)
   if (session.messages.length > 0) {
-    const history = session.messages.slice(-SESSION_MAX_HISTORY);
+    const history = session.messages
+      .slice(-SESSION_MAX_HISTORY)
+      .filter(m => m.content && m.content.trim().length > 0);
     messages.push(...history);
   }
   if (useRAG && searchQuery) {
@@ -476,7 +515,7 @@ app.post('/api/chat', async (req, res) => {
         model: process.env.LM_STUDIO_MODEL,
         messages,
         temperature: 0.7,
-        max_tokens: 800
+        max_tokens: 1200
       })
     });
     const data = await response.json();
@@ -609,9 +648,17 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
       }
     }
 
-    // 7i: Orquestração multi-intent no pipeline de voz
+    // 7l-C: Orquestração híbrida no pipeline de voz
     const { matches: voiceMatches, cleanMessage: voiceCleanText } = detectIntent(userText);
-    const voiceOrch = resolveOrchestration(voiceMatches);
+    let finalVoiceMatches = voiceMatches;
+    if (process.env.CLASSIFIER_MODEL && voiceMatches.length === 1 && voiceMatches[0].score === 1) {
+      const llmVoiceMatches = await classifyWithLLM(voiceCleanText);
+      if (llmVoiceMatches !== null) {
+        finalVoiceMatches = llmVoiceMatches;
+        console.log(`[PIPELINE] 🤖 LLM classificou: [${finalVoiceMatches.map(m=>m.id).join(', ')}]`);
+      }
+    }
+    const voiceOrch = resolveOrchestration(finalVoiceMatches);
     let voiceSpecialistActive = null;
 
     if (voiceOrch.mode === 'specialist') {
