@@ -691,7 +691,7 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
         model: process.env.LM_STUDIO_MODEL,
         messages,
         temperature: 0.7,
-        max_tokens: 300
+        max_tokens: 700
       })
     });
 
