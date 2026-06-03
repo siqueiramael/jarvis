@@ -106,8 +106,23 @@ window.updateSpecialistBadge = function(specialist) {
 
   if (specialist) {
     const persisted = specialist.persisted === true;
-    display.textContent = 'Luma [' + specialist.icon + ' ' + specialist.name + (persisted ? ' ~' : '') + ']';
-    display.title = (persisted ? 'Persistindo: ' : 'Modo especialista: ') + specialist.name + ' — clique para trocar';
+    let badgeText, badgeTitle;
+
+    if (specialist.id === 'conclave' && specialist.specialists) {
+      // Mapeia IDs para nomes dos specialists
+      const names = specialist.specialists.map(function(sid) {
+        const opt = SPECIALIST_OPTIONS.find(function(o) { return o.id === sid; });
+        return opt ? opt.name : sid;
+      });
+      badgeText = 'Luma [🔮 ' + names.join(' + ') + ']';
+      badgeTitle = 'Conclave: ' + names.join(' + ') + ' — clique para trocar';
+    } else {
+      badgeText = 'Luma [' + specialist.icon + ' ' + specialist.name + (persisted ? ' ~' : '') + ']';
+      badgeTitle = (persisted ? 'Persistindo: ' : 'Modo especialista: ') + specialist.name + ' — clique para trocar';
+    }
+
+    display.textContent = badgeText;
+    display.title = badgeTitle;
     display.style.opacity = persisted ? '0.65' : '0.85';
     display.dataset.specialistId = specialist.id;
   } else {
