@@ -177,13 +177,25 @@ async function saveSessionToObsidian(sessionId) {
   const dateStr = now.toISOString().split('T')[0];
   const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   const turns = Math.floor(session.messages.length / 2);
-  const title = 'Sessao ' + dateStr + ' ' + timeStr + ' (' + turns + ' turnos)';
+  const isVoice = session.agentId === 'voice' || (sessionId && sessionId.startsWith('voice-'));
+  const prefix = isVoice ? '🎤 Sessao Voz' : 'Sessao';
+  const folder = isVoice ? 'Luma/Sessoes/Voz' : 'Luma/Sessoes';
+  const title = prefix + ' ' + dateStr + ' ' + timeStr + ' (' + turns + ' turnos)';
+
+  // Metadados extras para sessões de voz
+  const specialists = session.specialistHistory
+    ? [...new Set(session.specialistHistory.filter(Boolean))].join(', ')
+    : '';
+  const meta = isVoice
+    ? 'Tipo: Voz\nEspecialistas: ' + (specialists || 'nenhum') + '\n\n'
+    : '';
+
   const lines = session.messages.map(function(m) {
     return '**' + (m.role === 'user' ? 'Voce' : 'Luma') + ':** ' + m.content;
   }).join('\n\n');
-  const content = 'Agente: ' + (session.agentId || 'luma') + '\n\n' + lines;
+  const content = meta + 'Agente: ' + (session.agentId || 'luma') + '\n\n' + lines;
   try {
-    await createObsidianNote({ title, content, folder: 'Luma/Sessoes' });
+    await createObsidianNote({ title, content, folder });
     console.log('[SESSION] Sessao ' + sessionId + ' salva no Obsidian (' + turns + ' turnos)');
   } catch (err) {
     console.error('[SESSION] Erro ao salvar:', err.message);
