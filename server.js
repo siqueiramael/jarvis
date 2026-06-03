@@ -680,14 +680,30 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
         console.log(`[PIPELINE] 🤖 LLM classificou: [${finalVoiceMatches.map(m=>m.id).join(', ')}]`);
       }
     }
-    const voiceOrch = resolveOrchestration(finalVoiceMatches);
+    let voiceOrch = resolveOrchestration(finalVoiceMatches);
     let voiceSpecialistActive = null;
+
+    // 7n-A: Persistência de specialist no voice pipeline
+    const VOICE_PERSISTENCE_WINDOW = 3;
+    if (voiceOrch.mode === 'generic' && voiceSession.specialistHistory?.length >= VOICE_PERSISTENCE_WINDOW) {
+      const recent = voiceSession.specialistHistory.slice(-VOICE_PERSISTENCE_WINDOW);
+      const allSame = recent.every(id => id && id === recent[0] && id !== 'conclave');
+      if (allSame) {
+        const persistedId = recent[0];
+        const spec = SPECIALIST_CONTEXTS[persistedId];
+        if (spec) {
+          voiceOrch = { mode: 'specialist', specialist: { id: persistedId, ...spec } };
+          console.log(`[PIPELINE] 🔁 ${spec.icon} ${spec.name} persistido (${VOICE_PERSISTENCE_WINDOW} msgs voz consecutivas)`);
+        }
+      }
+    }
 
     if (voiceOrch.mode === 'specialist') {
       const spec = voiceOrch.specialist;
-      voiceSpecialistActive = { id: spec.id, name: spec.name, icon: spec.icon };
+      const isPersisted = finalVoiceMatches.length === 0;
+      voiceSpecialistActive = { id: spec.id, name: spec.name, icon: spec.icon, persisted: isPersisted };
       messages.push({ role: 'system', content: spec.context });
-      console.log(`[PIPELINE] ${spec.icon} ${spec.name} ativado: "${voiceCleanText.substring(0, 50)}"`);
+      if (!isPersisted) console.log(`[PIPELINE] ${spec.icon} ${spec.name} ativado: "${voiceCleanText.substring(0, 50)}"`);
     } else if (voiceOrch.mode === 'conclave') {
       const names = voiceOrch.specialists.map(s => s.name).join(' + ');
       voiceSpecialistActive = { id: 'conclave', name: 'Conclave', icon: '🔮', specialists: voiceOrch.specialists.map(s => s.id) };
