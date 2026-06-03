@@ -177,9 +177,11 @@ async function saveSessionToObsidian(sessionId) {
   const dateStr = now.toISOString().split('T')[0];
   const timeStr = now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   const turns = Math.floor(session.messages.length / 2);
-  const isVoice = session.agentId === 'voice' || (sessionId && sessionId.startsWith('voice-'));
-  const prefix = isVoice ? '🎤 Sessao Voz' : 'Sessao';
-  const folder = isVoice ? 'Luma/Sessoes/Voz' : 'Luma/Sessoes';
+  const isVoice = session.agentId === 'voice' || session.hasVoice === true || (sessionId && sessionId.startsWith('voice-'));
+  const isMixed = session.hasVoice === true && session.agentId !== 'voice';
+  const prefix = isMixed ? '🔄 Sessao Mista' : isVoice ? '🎤 Sessao Voz' : 'Sessao';
+  const folder = isMixed ? 'Luma/Sessoes' : (isVoice ? 'Luma/Sessoes/Voz' : 'Luma/Sessoes');
+  // folder definido acima com isMixed
   const title = prefix + ' ' + dateStr + ' ' + timeStr + ' (' + turns + ' turnos)';
 
   // Metadados extras para sessões de voz
@@ -615,12 +617,13 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
 
     // 7l-B: Sessão de voz — init ou recupera
     const rawSid = req.body.sessionId;
-    const voiceSessionId = Array.isArray(rawSid) ? rawSid[0] : (rawSid || 'voice-default');
+    const voiceSessionId = Array.isArray(rawSid) ? rawSid[0] : (rawSid || 'default');
     if (!sessionStore.has(voiceSessionId)) {
       sessionStore.set(voiceSessionId, { messages: [], specialistHistory: [], lastActivity: Date.now(), agentId: 'voice' });
     }
     const voiceSession = sessionStore.get(voiceSessionId);
     voiceSession.lastActivity = Date.now();
+    voiceSession.hasVoice = true;
 
     // ─── 1. STT (via helper: Windows GPU preferencial) ───
     const tStt = Date.now();

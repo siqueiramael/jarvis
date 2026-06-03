@@ -3486,7 +3486,7 @@ initRealtimeBtn();
       const formData = new FormData();
       formData.append('audio', audioBlob, 'recording.webm');
       // 7l-B: sessionId para memória entre turnos de voz
-      formData.append('sessionId', 'voice-' + (window.currentVoiceSessionId || 'default'));
+      formData.append('sessionId', window.lumaSessionId || 'default');
       console.log('[VOICE] Enviando', audioBlob.size, 'bytes ao pipeline...');
 
       const response = await fetch('/api/voice/pipeline', {
