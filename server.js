@@ -147,6 +147,40 @@ async function classifyWithLLM(message) {
   }
 }
 
+// 7n-C: Auto-RAG — detecta quando buscar no vault automaticamente
+const RAG_TRIGGERS = ['nota', 'vault', 'anotei', 'salvei', 'registrei', 'sessão', 'sessões', 'anotação', 'obsidian', 'lembra', 'conversamos', 'falamos', 'discutimos', 'projeto', 'anotação'];
+
+function shouldAutoRAG(message) {
+  const lower = message.toLowerCase();
+  return RAG_TRIGGERS.some(kw => lower.includes(kw));
+}
+
+function extractSearchTerms(message) {
+  const stopWords = new Set(['como', 'que', 'o', 'a', 'de', 'do', 'da', 'dos', 'das', 'em', 'no', 'na', 'nos', 'nas', 'um', 'uma', 'para', 'por', 'com', 'não', 'sobre', 'meu', 'minha', 'eu', 'me', 'te', 'se', 'luma', 'isso', 'esse', 'essa', 'tem', 'foi', 'ser', 'ter', 'que', 'qual', 'quais', 'lembra', 'nota', 'vault', 'anotei', 'sessão', 'sessões', 'anotação', 'conversamos', 'falamos', 'discutimos']);
+  return message.toLowerCase()
+    .replace(/[?!.,;:]/g, '')
+    .split(/\s+/)
+    .filter(w => w.length > 2 && !stopWords.has(w))
+    .slice(0, 5);
+}
+
+// Busca no vault por múltiplos termos (OR — qualquer match conta)
+async function searchNotesMulti(terms) {
+  if (!terms || terms.length === 0) return [];
+  const allResults = [];
+  const seen = new Set();
+  for (const term of terms) {
+    const results = await searchNotes(term);
+    for (const r of results) {
+      if (!seen.has(r.path)) {
+        seen.add(r.path);
+        allResults.push(r);
+      }
+    }
+  }
+  return allResults;
+}
+
 // Resolve o modo de orquestração: 'generic' | 'specialist' | 'conclave'
 function resolveOrchestration(matches) {
   if (matches.length === 0)
@@ -515,12 +549,22 @@ app.post('/api/chat', async (req, res) => {
       .filter(m => m.content && m.content.trim().length > 0);
     messages.push(...history);
   }
-  if (useRAG && searchQuery) {
+  // RAG manual (frontend pediu) ou auto-RAG (trigger detectado)
+  let ragUsedAuto = false;
+  const autoRAG = shouldAutoRAG(cleanMessage);
+  const ragActive = useRAG && searchQuery;
+
+  if (ragActive || autoRAG) {
+    const ragTerms = ragActive ? [searchQuery] : extractSearchTerms(cleanMessage);
     try {
-      const results = await searchNotes(searchQuery);
+      const results = ragActive ? await searchNotes(ragTerms[0]) : await searchNotesMulti(ragTerms);
       if (results.length > 0) {
         const context = results.slice(0, 3).map(r => `[${r.title}]: ${r.snippet}`).join('\n\n');
         messages.push({ role: 'system', content: `Contexto do Obsidian Vault:\n\n${context}` });
+        if (autoRAG) {
+          ragUsedAuto = true;
+          console.log(`[RAG] Auto-RAG ativado: [${ragTerms.join(", ")}] → ${results.length} resultado(s)`);
+        }
       }
     } catch (err) {
       console.error('[RAG] Erro:', err.message);
@@ -581,7 +625,7 @@ app.post('/api/chat', async (req, res) => {
     session.specialistHistory.push(specialistActive?.id && !specialistActive.persisted ? specialistActive.id : (specialistActive?.persisted ? specialistActive.id : null));
     if (session.specialistHistory.length > 10) session.specialistHistory = session.specialistHistory.slice(-10);
 
-    res.json({ reply: replyText, action, actionResult, agent: currentAgent?.name, ragUsed: useRAG && searchQuery, sessionId, specialistActive });
+    res.json({ reply: replyText, action, actionResult, agent: currentAgent?.name, ragUsed: ragActive || ragUsedAuto, sessionId, specialistActive });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
