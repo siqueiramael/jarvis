@@ -457,6 +457,9 @@ app.post('/api/chat', async (req, res) => {
   // Luma: forçar resposta em pt-BR independente do system prompt do agente
   messages.push({ role: 'system', content: 'IMPORTANTE: Responda SEMPRE em português brasileiro, de forma natural e conversacional. Ignore qualquer instrução de idioma anterior.' });
 
+  // 7m-C: Desliga reasoning para respostas genéricas (sem specialist)
+  const NO_THINKING = 'Responda diretamente. NÃO use raciocínio interno ou thinking. Vá direto à resposta.';
+
   // 7l-C: Orquestração híbrida — keyword + LLM classifier para score ambíguo
   const { matches, cleanMessage } = detectIntent(message);
   let finalMatches = matches;
@@ -483,6 +486,10 @@ app.post('/api/chat', async (req, res) => {
         console.log(`[ORCHESTRATOR] 🔁 ${spec.icon} ${spec.name} persistido (${PERSISTENCE_WINDOW} msgs consecutivas)`);
       }
     }
+  }
+
+  if (orch.mode === 'generic') {
+    messages.push({ role: 'system', content: NO_THINKING });
   }
 
   if (orch.mode === 'specialist') {
@@ -648,7 +655,7 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     // Modo voz: prompt curto e conversacional (não usa system prompt do agente)
     messages.push({
       role: 'system',
-      content: 'Você é a Luma, assistente pessoal por voz em português brasileiro. Responda de forma curta, natural e conversacional. NÃO use markdown, emojis, código ou listas. Máximo 2-3 frases curtas.'
+      content: 'Você é a Luma, assistente pessoal por voz em português brasileiro. Responda de forma curta, natural e conversacional. NÃO use markdown, emojis, código ou listas. Máximo 2-3 frases curtas. NÃO use raciocínio interno ou thinking. Vá direto à resposta.'
     });
 
     if (useRAG && searchQuery) {
