@@ -96,6 +96,27 @@ function detectIntent(message) {
     }
   }
 
+  // 1.5 Voice triggers — invocação natural por nome (voz)
+  const VOICE_NAME_MAP = {
+    'dex': 'dev', 'decs': 'dev', 'decks': 'dev', 'dexter': 'dev',
+    'deve': 'dev', 'deves': 'dev', 'déx': 'dev', 'décs': 'dev', 'tex': 'dev',
+    'aria': 'architect', 'ária': 'architect', 'arya': 'architect',
+    'gage': 'devops', 'gabe': 'devops', 'gauge': 'devops', 'gaje': 'devops', 'guage': 'devops',
+    'dara': 'data-engineer', 'dará': 'data-engineer', 'tara': 'data-engineer',
+    'quinn': 'qa', 'queen': 'qa', 'quin': 'qa', 'quim': 'qa', 'quin': 'qa',
+    'morgan': 'pm', 'morgam': 'pm', 'mórgan': 'pm'
+  };
+  const voicePattern = message.toLowerCase().match(/(?:chama|fala com|quero falar com|conversa com|ativa|coloca|chame)\s+(?:o|a|os|as)?\s*(\w+)/);
+  if (voicePattern) {
+    const spokenName = voicePattern[1];
+    const voiceSpecId = VOICE_NAME_MAP[spokenName] || null;
+    if (voiceSpecId) {
+      const cleanMsg = message.replace(voicePattern[0], '').replace(/\s+/g, ' ').trim();
+      console.log(`[ORCHESTRATOR] 🎤 Voice trigger: "${spokenName}" → ${voiceSpecId}`);
+      return { matches: [{ id: voiceSpecId, score: 98 }], cleanMessage: cleanMsg || message };
+    }
+  }
+
   // 2. Keyword scoring — coleta TODOS os matches acima do threshold
   const lower = message.toLowerCase();
   const wordCount = message.trim().split(/\s+/).length;
