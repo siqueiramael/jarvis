@@ -723,18 +723,23 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
       content: 'Você é a Luma, assistente pessoal por voz em português brasileiro. Responda de forma curta, natural e conversacional. NÃO use markdown, emojis, código ou listas. Máximo 2-3 frases curtas. NÃO use raciocínio interno ou thinking. Vá direto à resposta.'
     });
 
-    if (useRAG && searchQuery) {
+    // 7o-A: RAG manual ou auto-RAG no voice pipeline
+    const voiceAutoRAG = shouldAutoRAG(userText);
+    const voiceRagActive = useRAG && searchQuery;
+
+    if (voiceRagActive || voiceAutoRAG) {
+      const ragTerms = voiceRagActive ? [searchQuery] : extractSearchTerms(userText);
       try {
-        const results = await searchNotes(searchQuery);
+        const results = voiceRagActive ? await searchNotes(ragTerms[0]) : await searchNotesMulti(ragTerms);
         if (results.length > 0) {
           const context = results.slice(0, 3).map(r => `[${r.title}]: ${r.snippet}`).join('\n\n');
           messages.push({ role: 'system', content: `Contexto do Obsidian Vault:\n\n${context}` });
+          if (voiceAutoRAG) console.log(`[PIPELINE] 📚 Auto-RAG: [${ragTerms.join(', ')}] → ${results.length} resultado(s)`);
         }
       } catch (e) {
         console.error('[PIPELINE RAG]', e.message);
       }
     }
-
     // 7l-C: Orquestração híbrida no pipeline de voz
     const { matches: voiceMatches, cleanMessage: voiceCleanText } = detectIntent(userText);
     let finalVoiceMatches = voiceMatches;
