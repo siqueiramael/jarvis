@@ -225,6 +225,33 @@ function resolveOrchestration(matches) {
   };
 }
 
+// 7o-B: Gera resumo da sessão via LLM
+async function generateSessionSummary(sessionMessages) {
+  try {
+    const lastMsgs = sessionMessages.slice(-10);
+    const conversation = lastMsgs.map(m => (m.role === 'user' ? 'Usuário' : 'Luma') + ': ' + m.content.substring(0, 150)).join('\n');
+    const resp = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.LM_STUDIO_MODEL,
+        messages: [
+          { role: 'system', content: 'Resuma a conversa abaixo em 1-2 frases curtas em português. NÃO use raciocínio interno ou thinking. Vá direto ao resumo. Apenas o resumo, sem prefixo.' },
+          { role: 'user', content: conversation }
+        ],
+        max_tokens: 100,
+        temperature: 0.3
+      })
+    });
+    const data = await resp.json();
+    const summary = (data.choices?.[0]?.message?.content || '').replace(/<0x[0-9A-Fa-f]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return summary || null;
+  } catch (e) {
+    console.error('[SESSION] Erro ao gerar resumo:', e.message);
+    return null;
+  }
+}
+
 async function saveSessionToObsidian(sessionId) {
   const session = sessionStore.get(sessionId);
   if (!session || session.messages.length === 0) return;
@@ -250,7 +277,11 @@ async function saveSessionToObsidian(sessionId) {
   const lines = session.messages.map(function(m) {
     return '**' + (m.role === 'user' ? 'Voce' : 'Luma') + ':** ' + m.content;
   }).join('\n\n');
-  const content = meta + 'Agente: ' + (session.agentId || 'luma') + '\n\n' + lines;
+  // 7o-B: Gera resumo automático
+  const summary = await generateSessionSummary(session.messages);
+  const summaryBlock = summary ? 'Resumo: ' + summary + '\n\n' : '';
+
+  const content = summaryBlock + meta + 'Agente: ' + (session.agentId || 'luma') + '\n\n' + lines;
   try {
     await createObsidianNote({ title, content, folder });
     console.log('[SESSION] Sessao ' + sessionId + ' salva no Obsidian (' + turns + ' turnos)');
