@@ -169,7 +169,11 @@ async function classifyWithLLM(message) {
 }
 
 // 7n-C: Auto-RAG — detecta quando buscar no vault automaticamente
-const RAG_TRIGGERS = ['nota', 'vault', 'anotei', 'salvei', 'registrei', 'sessão', 'sessões', 'anotação', 'obsidian', 'lembra', 'conversamos', 'falamos', 'discutimos', 'projeto', 'anotação'];
+const RAG_TRIGGERS = ['vault', 'anotei', 'salvei', 'registrei', 'sessão', 'sessões', 'anotação', 'obsidian', 'lembra', 'conversamos', 'falamos', 'discutimos', 'projeto'];
+
+// 7o-C: Detecta se a mensagem é um comando de action
+const ACTION_TRIGGERS = /(?:cria|crie|criar|faz|faça|faca)\s+(?:uma?\s+)?nota/i;
+const ACTION_INSTRUCTION = 'Se o usuário pediu para criar uma nota, responda APENAS com JSON: {"text":"mensagem confirmando","action":{"type":"create_note","params":{"title":"titulo","content":"conteúdo","folder":"Luma/Notas"}}}. Se NÃO é um comando de ação, responda normalmente.';
 
 function shouldAutoRAG(message) {
   const lower = message.toLowerCase();
@@ -821,6 +825,12 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
       messages.push(...voiceHistory);
     }
 
+    // 7o-C: Injeta instrução de action se detectado comando
+    if (ACTION_TRIGGERS.test(voiceCleanText)) {
+      messages.push({ role: 'system', content: ACTION_INSTRUCTION });
+      console.log('[PIPELINE] ⚙️ Action trigger detectado');
+    }
+
     messages.push({ role: 'user', content: voiceCleanText });
 
     const llmResp = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
@@ -835,10 +845,36 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     });
 
     const llmData = await llmResp.json();
-    const replyText = (llmData.choices?.[0]?.message?.content || 'Erro ao gerar resposta.').replace(/<0x[0-9A-Fa-f]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+    const rawVoiceContent = (llmData.choices?.[0]?.message?.content || 'Erro ao gerar resposta.').replace(/<0x[0-9A-Fa-f]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+    // 7o-C: Parse de action no voice pipeline
+    let replyText = rawVoiceContent;
+    let voiceAction = null;
+    let voiceActionResult = null;
+    try {
+      const trimmed = rawVoiceContent.trim();
+      let jsonStr = trimmed.startsWith('{') ? trimmed : null;
+      if (!jsonStr) {
+        const match = trimmed.match(/\{[\s\S]*?"text"[\s\S]*?"action"[\s\S]*\}/);
+        if (match) jsonStr = match[0];
+      }
+      if (jsonStr) {
+        const parsed = JSON.parse(jsonStr);
+        if (parsed.text && parsed.action) {
+          replyText = parsed.text;
+          voiceAction = parsed.action;
+        }
+      }
+    } catch { /* resposta normal em texto */ }
+
+    if (voiceAction) {
+      voiceActionResult = await executeAction(voiceAction);
+      console.log(`[PIPELINE] ⚙️ Action executada: ${voiceAction.type}`, voiceActionResult);
+    }
+
     timings.chat = Date.now() - tChat;
     console.log(`[PIPELINE] CHAT (${timings.chat}ms): "${replyText.substring(0, 80)}..."`);
-
     // 7l-B: Salva turno no histórico da sessão de voz
     voiceSession.messages.push({ role: 'user', content: voiceCleanText });
     voiceSession.messages.push({ role: 'assistant', content: replyText });
