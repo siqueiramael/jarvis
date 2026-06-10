@@ -18,40 +18,19 @@
       <button class="sidebar-close-btn" id="drawer-close">✕</button>
     </div>
 
-    <section class="sidebar-section">
-      <div class="section-title">Sistema</div>
-      <div class="status-item"><span class="status-dot-sm" id="bar-api-status"></span><span>VPS / API</span></div>
-      <div class="status-item"><span class="status-dot-sm" id="bar-claude-status"></span><span>LM Studio</span></div>
-      <div class="status-item"><span class="status-dot-sm" id="bar-voice-status"></span><span>Whisper STT</span></div>
-      <div class="status-item"><span class="status-dot-sm" id="obsidian-status-dot"></span><span>Obsidian Vault</span></div>
-    </section>
-
-    <section class="sidebar-section">
-      <div class="section-title">Agentes</div>
-      <div class="agents-list">
-        <div class="aiox-agent" data-entity="aios-master"><span class="aiox-dot online"></span><span class="aiox-name">Orion</span><span class="aiox-role">Master</span></div>
-        <div class="aiox-agent" data-entity="architect"><span class="aiox-dot online"></span><span class="aiox-name">Aria</span><span class="aiox-role">Architect</span></div>
-        <div class="aiox-agent" data-entity="dev"><span class="aiox-dot online"></span><span class="aiox-name">Dex</span><span class="aiox-role">Dev</span></div>
-        <div class="aiox-agent" data-entity="data-engineer"><span class="aiox-dot online"></span><span class="aiox-name">Dara</span><span class="aiox-role">Data</span></div>
-        <div class="aiox-agent" data-entity="devops"><span class="aiox-dot online"></span><span class="aiox-name">Gage</span><span class="aiox-role">DevOps</span></div>
-        <div class="aiox-agent" data-entity="ux"><span class="aiox-dot online"></span><span class="aiox-name">Uma</span><span class="aiox-role">UX</span></div>
-        <div class="aiox-agent" data-entity="pm"><span class="aiox-dot online"></span><span class="aiox-name">Morgan</span><span class="aiox-role">PM</span></div>
-        <div class="aiox-agent" data-entity="po"><span class="aiox-dot online"></span><span class="aiox-name">Pax</span><span class="aiox-role">PO</span></div>
-        <div class="aiox-agent" data-entity="analyst"><span class="aiox-dot online"></span><span class="aiox-name">Atlas</span><span class="aiox-role">Analyst</span></div>
-        <div class="aiox-agent" data-entity="qa"><span class="aiox-dot online"></span><span class="aiox-name">Quinn</span><span class="aiox-role">QA</span></div>
-        <div class="aiox-agent" data-entity="sm"><span class="aiox-dot online"></span><span class="aiox-name">River</span><span class="aiox-role">SM</span></div>
-        <div class="aiox-agent" data-entity="squad-creator"><span class="aiox-dot online"></span><span class="aiox-name">Craft</span><span class="aiox-role">Squad</span></div>
-      </div>
-    </section>
-
-    <section class="sidebar-section">
-      <div class="section-title">Idioma</div>
-      <div class="lang-btns">
-        <button class="lang-btn active" id="lang-br">PT</button>
-        <button class="lang-btn" id="lang-en">EN</button>
-        <button class="lang-btn" id="lang-es">ES</button>
-      </div>
-    </section>
+    <div class="sidebar-new-chat">
+      <button class="new-chat-btn" id="new-chat-btn">
+        <span class="new-chat-icon">+</span>
+        <span>Nova conversa</span>
+      </button>
+    </div>
+    <div class="sidebar-sessions" id="session-list">
+      <div class="sessions-loading">Carregando...</div>
+    </div>
+    <div class="sidebar-footer">
+      <button class="sidebar-footer-btn" id="sidebar-memory-btn" title="Memória">🧠 Memória</button>
+      <button class="sidebar-footer-btn" id="sidebar-config-btn" title="Configurações">⚙️</button>
+    </div>
   </aside>
 
   <!-- OVERLAY mobile -->

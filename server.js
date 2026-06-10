@@ -1127,6 +1127,54 @@ async function executeAction(action) {
 // ============================================
 // ENDPOINTS: Obsidian Create + Append + Actions Run
 // ============================================
+// 7p: Lista sessões salvas no Obsidian para sidebar
+app.get('/api/sessions/list', async (req, res) => {
+  try {
+    const sessionsDir = join(VAULT_PATH, 'Luma/Sessoes');
+    const vozDir = join(sessionsDir, 'Voz');
+    const sessions = [];
+
+    async function readSessionFiles(dir, type) {
+      if (!existsSync(dir)) return;
+      const files = await readdir(dir);
+      for (const f of files) {
+        if (!f.endsWith('.md')) continue;
+        const fullPath = join(dir, f);
+        const stat = await readFile(fullPath, 'utf-8');
+        const lines = stat.split('\n');
+        // Extrai resumo se existir
+        const resumoLine = lines.find(l => l.startsWith('Resumo:'));
+        const summary = resumoLine ? resumoLine.replace('Resumo: ', '').trim() : '';
+        // Extrai data do nome do arquivo (Sessao YYYY-MM-DD HH-MM)
+        const dateMatch = f.match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}-\d{2})/);
+        const date = dateMatch ? dateMatch[1] + 'T' + dateMatch[2].replace('-', ':') : '';
+        // Extrai turnos
+        const turnsMatch = f.match(/(\d+)\s+turnos/);
+        const turns = turnsMatch ? parseInt(turnsMatch[1]) : 0;
+
+        sessions.push({
+          title: f.replace('.md', ''),
+          path: type === 'voz' ? 'Luma/Sessoes/Voz/' + f : 'Luma/Sessoes/' + f,
+          date,
+          type,
+          turns,
+          summary: summary.substring(0, 120)
+        });
+      }
+    }
+
+    await readSessionFiles(sessionsDir, 'chat');
+    await readSessionFiles(vozDir, 'voz');
+
+    // Ordena por data desc
+    sessions.sort((a, b) => b.date.localeCompare(a.date));
+    res.json({ sessions: sessions.slice(0, 30) });
+  } catch (err) {
+    console.error('[SESSIONS]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/obsidian/create', async (req, res) => {
   try {
     const { title, content, folder } = req.body;

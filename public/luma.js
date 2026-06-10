@@ -206,3 +206,120 @@ if (chatOut) {
     chatOut.scrollTop = chatOut.scrollHeight;
   }).observe(chatOut, { childList: true, subtree: true });
 }
+
+// === SESSION SIDEBAR — 7p ===
+async function loadSessionList() {
+  const container = document.getElementById('session-list');
+  if (!container) return;
+
+  try {
+    const resp = await fetch('/api/sessions/list');
+    const data = await resp.json();
+    if (!data.sessions || data.sessions.length === 0) {
+      container.innerHTML = '<div class="sessions-loading">Nenhuma sessão salva</div>';
+      return;
+    }
+
+    // Agrupa por período
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const yesterday = new Date(now - 86400000).toISOString().split('T')[0];
+    const weekAgo = new Date(now - 7 * 86400000).toISOString().split('T')[0];
+
+    const groups = { today: [], yesterday: [], week: [], older: [] };
+    data.sessions.forEach(function(s) {
+      const d = s.date.split('T')[0];
+      if (d === today) groups.today.push(s);
+      else if (d === yesterday) groups.yesterday.push(s);
+      else if (d >= weekAgo) groups.week.push(s);
+      else groups.older.push(s);
+    });
+
+    let html = '';
+    function renderGroup(title, items) {
+      if (items.length === 0) return '';
+      let h = '<div class="session-group-title">' + title + '</div>';
+      items.forEach(function(s) {
+        var icon = s.type === 'voz' ? '🎤' : '💬';
+        var displayTitle = s.summary || s.title.replace(/^(Sessao|🎤 Sessao Voz|🔄 Sessao Mista)\s+\d{4}-\d{2}-\d{2}\s+\d{2}-\d{2}\s+/, '').replace(/\(\d+ turnos\)/, '').trim();
+        if (!displayTitle || displayTitle.length < 3) displayTitle = s.title;
+        h += '<div class="session-item" data-path="' + s.path + '" title="' + (s.summary || s.title) + '">';
+        h += '<span class="session-icon">' + icon + '</span>';
+        h += '<span class="session-title">' + displayTitle + '</span>';
+        h += '</div>';
+      });
+      return h;
+    }
+
+    html += renderGroup('Hoje', groups.today);
+    html += renderGroup('Ontem', groups.yesterday);
+    html += renderGroup('Esta semana', groups.week);
+    html += renderGroup('Anteriores', groups.older);
+
+    container.innerHTML = html;
+
+    // Click handler — carrega sessão
+    container.querySelectorAll('.session-item').forEach(function(el) {
+      el.addEventListener('click', function() {
+        loadSessionContent(el.dataset.path);
+        container.querySelectorAll('.session-item').forEach(function(e) { e.classList.remove('active'); });
+        el.classList.add('active');
+      });
+    });
+  } catch (e) {
+    container.innerHTML = '<div class="sessions-loading">Erro ao carregar</div>';
+    console.error('[SESSIONS]', e);
+  }
+}
+
+async function loadSessionContent(path) {
+  try {
+    const resp = await fetch('/api/obsidian/note?path=' + encodeURIComponent(path));
+    const data = await resp.json();
+    if (!data || !data.content) return;
+
+    const chatOutput = document.getElementById('chat-mini-output');
+    if (!chatOutput) return;
+
+    // Limpa chat e mostra conteúdo da sessão (read-only)
+    chatOutput.innerHTML = '';
+    const lines = data.content.split('\n');
+    lines.forEach(function(line) {
+      if (line.startsWith('**Voce:**')) {
+        var div = document.createElement('div');
+        div.className = 'chat-msg user-msg';
+        div.textContent = line.replace('**Voce:** ', '');
+        chatOutput.appendChild(div);
+      } else if (line.startsWith('**Luma:**')) {
+        var div = document.createElement('div');
+        div.className = 'chat-msg bot-msg';
+        div.textContent = line.replace('**Luma:** ', '');
+        chatOutput.appendChild(div);
+      }
+    });
+
+    chatOutput.scrollTop = chatOutput.scrollHeight;
+  } catch (e) {
+    console.error('[SESSIONS] Erro ao carregar sessão:', e);
+  }
+}
+
+// "Nova conversa" button
+document.addEventListener('DOMContentLoaded', function() {
+  var newBtn = document.getElementById('new-chat-btn');
+  if (newBtn) {
+    newBtn.addEventListener('click', function() {
+      var chatOutput = document.getElementById('chat-mini-output');
+      if (chatOutput) {
+        chatOutput.innerHTML = '<div class="luma-welcome"><div class="welcome-glyph">✦</div><p>Olá! Eu sou a <strong>Luma</strong>.</p><p class="welcome-sub">Como posso ajudar?</p></div>';
+      }
+      // Reset session
+      window.lumaSessionId = 'session-' + Date.now();
+      document.querySelectorAll('.session-item').forEach(function(e) { e.classList.remove('active'); });
+      document.getElementById('chat-mini-input')?.focus();
+    });
+  }
+
+  // Carrega sessões na sidebar
+  setTimeout(loadSessionList, 1000);
+});
