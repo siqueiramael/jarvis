@@ -2,7 +2,7 @@ import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { readdir, readFile, writeFile, unlink } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import dotenv from 'dotenv';
@@ -206,6 +206,71 @@ async function searchNotesMulti(terms) {
   return allResults;
 }
 
+// 7o-D: Memória persistente entre sessões
+const MEMORY_PATH = join(__dirname, 'data/obsidian-vault/Luma/memory.md');
+let PERSISTENT_MEMORY = '';
+
+function loadMemory() {
+  try {
+    if (existsSync(MEMORY_PATH)) {
+      PERSISTENT_MEMORY = readFileSync(MEMORY_PATH, 'utf-8').trim();
+      const lines = PERSISTENT_MEMORY.split('\n').filter(l => l.trim().startsWith('-')).length;
+      console.log('[MEMORY] Carregada: ' + lines + ' fatos');
+    } else {
+      writeFileSync(MEMORY_PATH, '# Memória da Luma\n\nFatos extraídos das conversas:\n\n', 'utf-8');
+      console.log('[MEMORY] Arquivo criado: memory.md');
+    }
+  } catch (e) {
+    console.error('[MEMORY] Erro ao carregar:', e.message);
+  }
+}
+
+async function extractMemoryFacts(sessionMessages) {
+  try {
+    const lastMsgs = sessionMessages.slice(-10);
+    const conversation = lastMsgs.map(m => (m.role === 'user' ? 'Usuário' : 'Luma') + ': ' + m.content.substring(0, 200)).join('\n');
+    const existing = PERSISTENT_MEMORY.split('\n').filter(l => l.trim().startsWith('-')).join('\n');
+    const resp = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.CLASSIFIER_MODEL || process.env.LM_STUDIO_MODEL,
+        messages: [
+          { role: 'system', content: 'Extraia fatos-chave NOVOS sobre o usuário desta conversa. Retorne APENAS linhas começando com "- " (uma por fato). Se não houver fatos novos, retorne "NENHUM". NÃO repita fatos já conhecidos.' },
+          { role: 'user', content: 'Fatos já conhecidos:\n' + (existing || 'nenhum') + '\n\nConversa:\n' + conversation }
+        ],
+        max_tokens: 150,
+        temperature: 0.3
+      })
+    });
+    const data = await resp.json();
+    const raw = (data.choices?.[0]?.message?.content || '').replace(/<0x[0-9A-Fa-f]+>/g, ' ').trim();
+    if (!raw || raw === 'NENHUM' || !raw.includes('-')) return null;
+    return raw.split('\n').filter(l => l.trim().startsWith('-')).map(l => l.trim());
+  } catch (e) {
+    console.error('[MEMORY] Erro ao extrair fatos:', e.message);
+    return null;
+  }
+}
+
+function appendMemory(newFacts) {
+  if (!newFacts || newFacts.length === 0) return;
+  try {
+    const existing = PERSISTENT_MEMORY.split('\n').filter(l => l.trim().startsWith('-')).map(l => l.trim().toLowerCase());
+    const unique = newFacts.filter(f => !existing.includes(f.trim().toLowerCase()));
+    if (unique.length === 0) return;
+    const toAppend = unique.join('\n') + '\n';
+    appendFileSync(MEMORY_PATH, toAppend, 'utf-8');
+    PERSISTENT_MEMORY += '\n' + toAppend;
+    console.log('[MEMORY] +' + unique.length + ' fato(s): ' + unique.join(' | '));
+  } catch (e) {
+    console.error('[MEMORY] Erro ao salvar:', e.message);
+  }
+}
+
+// Carrega memória no boot
+loadMemory();
+
 // Resolve o modo de orquestração: 'generic' | 'specialist' | 'conclave'
 function resolveOrchestration(matches) {
   if (matches.length === 0)
@@ -284,6 +349,14 @@ async function saveSessionToObsidian(sessionId) {
   // 7o-B: Gera resumo automático
   const summary = await generateSessionSummary(session.messages);
   const summaryBlock = summary ? 'Resumo: ' + summary + '\n\n' : '';
+
+  // 7o-D: Extrai fatos de memória da sessão
+  const newFacts = await extractMemoryFacts(session.messages);
+  if (newFacts) {
+    appendMemory(newFacts);
+  } else {
+    console.log('[MEMORY] Nenhum fato novo extraído da sessão');
+  }
 
   const content = summaryBlock + meta + 'Agente: ' + (session.agentId || 'luma') + '\n\n' + lines;
   try {
@@ -546,6 +619,12 @@ app.post('/api/chat', async (req, res) => {
   }
   // Luma: forçar resposta em pt-BR independente do system prompt do agente
   messages.push({ role: 'system', content: 'IMPORTANTE: Responda SEMPRE em português brasileiro, de forma natural e conversacional. Ignore qualquer instrução de idioma anterior.' });
+
+  // 7o-D: Injeta memória persistente
+  if (PERSISTENT_MEMORY) {
+    const memFacts = PERSISTENT_MEMORY.split('\n').filter(l => l.trim().startsWith('-')).slice(-20).join('\n');
+    if (memFacts) messages.push({ role: 'system', content: 'Fatos sobre o usuário (use naturalmente, sem listar):\n' + memFacts });
+  }
 
   // 7m-C: Desliga reasoning para respostas genéricas (sem specialist)
   const NO_THINKING = 'Responda diretamente. NÃO use raciocínio interno ou thinking. Vá direto à resposta.';
