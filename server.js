@@ -172,8 +172,25 @@ async function classifyWithLLM(message) {
 const RAG_TRIGGERS = ['vault', 'anotei', 'salvei', 'registrei', 'sessão', 'sessões', 'anotação', 'obsidian', 'lembra', 'conversamos', 'falamos', 'discutimos', 'projeto'];
 
 // 7o-C: Detecta se a mensagem é um comando de action
-const ACTION_TRIGGERS = /(?:cria|crie|criar|faz|faça|faca)\s+(?:uma?\s+)?nota/i;
-const ACTION_INSTRUCTION = 'Se o usuário pediu para criar uma nota, responda APENAS com JSON: {"text":"mensagem confirmando","action":{"type":"create_note","params":{"title":"titulo","content":"conteúdo","folder":"Luma/Notas"}}}. Se NÃO é um comando de ação, responda normalmente.';
+const ACTION_TRIGGERS = /(?:cria|crie|criar|faz|faça|faca)\s+(?:uma?\s+)?nota|(?:faz|faça|faca)\s+(?:um?\s+)?commit|(?:abre|abra|abrir|abre)\s+(?:o|a)?\s*\w+|(?:tira|tire|tirar|captura|capture)\s+(?:uma?\s+)?(?:screenshot|print|captura|foto\s+da\s+tela)|(?:executa|execute|roda|rode|rodar)\s+(?:o\s+)?(?:comando|command)/i;
+
+const ACTION_INSTRUCTIONS = {
+  nota: 'Responda APENAS com JSON: {"text":"confirmação curta","action":{"type":"create_note","params":{"title":"titulo da nota","content":"conteúdo gerado","folder":"Luma/Notas"}}}',
+  commit: 'Responda APENAS com JSON: {"text":"confirmação curta","action":{"type":"git_commit","params":{"message":"mensagem do commit","path":"/opt/jarvis-v2"}}}',
+  abre: 'Responda APENAS com JSON: {"text":"confirmação curta","action":{"type":"open_app","params":{"cmd":"comando para abrir o app"}}}. Apps comuns: "code" (VS Code), "start chrome" (Chrome), "start explorer" (Explorer).',
+  screenshot: 'Responda APENAS com JSON: {"text":"confirmação curta","action":{"type":"screenshot","params":{}}}',
+  executa: 'Responda APENAS com JSON: {"text":"confirmação curta","action":{"type":"execute_shell","params":{"cmd":"o comando exato do usuário"}}}'
+};
+
+function getActionInstruction(message) {
+  const lower = message.toLowerCase();
+  if (/(?:cria|crie|criar|faz|faça)\s+(?:uma?\s+)?nota/i.test(lower)) return ACTION_INSTRUCTIONS.nota;
+  if (/(?:faz|faça|faca)\s+(?:um?\s+)?commit/i.test(lower)) return ACTION_INSTRUCTIONS.commit;
+  if (/(?:tira|tire|captura|capture)\s+(?:uma?\s+)?(?:screenshot|print|captura|foto)/i.test(lower)) return ACTION_INSTRUCTIONS.screenshot;
+  if (/(?:executa|execute|roda|rode)\s+(?:o\s+)?(?:comando|command)/i.test(lower)) return ACTION_INSTRUCTIONS.executa;
+  if (/(?:abre|abra|abrir)\s+/i.test(lower)) return ACTION_INSTRUCTIONS.abre;
+  return null;
+}
 
 function shouldAutoRAG(message) {
   const lower = message.toLowerCase();
@@ -705,6 +722,15 @@ app.post('/api/chat', async (req, res) => {
       console.error('[RAG] Erro:', err.message);
     }
   }
+  // 7q: Action detection no chat
+  if (ACTION_TRIGGERS.test(cleanMessage)) {
+    const chatActionInst = getActionInstruction(cleanMessage);
+    if (chatActionInst) {
+      messages.push({ role: 'system', content: chatActionInst });
+      console.log('[ORCHESTRATOR] ⚙️ Action trigger no chat');
+    }
+  }
+
   messages.push({ role: 'user', content: cleanMessage });
   
   try {
@@ -906,8 +932,11 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
 
     // 7o-C: Injeta instrução de action se detectado comando
     if (ACTION_TRIGGERS.test(voiceCleanText)) {
-      messages.push({ role: 'system', content: ACTION_INSTRUCTION });
-      console.log('[PIPELINE] ⚙️ Action trigger detectado');
+      const actionInst = getActionInstruction(voiceCleanText);
+      if (actionInst) {
+        messages.push({ role: 'system', content: actionInst });
+        console.log('[PIPELINE] ⚙️ Action trigger detectado');
+      }
     }
 
     messages.push({ role: 'user', content: voiceCleanText });
