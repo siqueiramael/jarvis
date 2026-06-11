@@ -853,6 +853,49 @@ app.post('/api/chat', async (req, res) => {
 
 
 // Limpa texto pra TTS: remove emojis, markdown, code blocks, limita tamanho
+// ===== Model switcher (modelo de resposta) =====
+const LM_BASE = (process.env.OPENAI_API_BASE || '').replace('/v1', '');
+async function fetchLmModels() {
+  const resp = await fetch(LM_BASE + '/api/v0/models');
+  const data = await resp.json();
+  return (data.data || []).filter(m => m.type === 'llm' || m.type === 'vlm');
+}
+app.get('/api/models', async (req, res) => {
+  try {
+    const models = await fetchLmModels();
+    res.json({
+      current: currentModel,
+      models: models.map(m => ({
+        id: m.id,
+        state: m.state,
+        type: m.type,
+        quantization: m.quantization,
+        maxContext: m.max_context_length,
+        loadedContext: m.loaded_context_length || null
+      }))
+    });
+  } catch (err) {
+    res.status(502).json({ error: 'LM Studio inacessivel: ' + err.message });
+  }
+});
+app.get('/api/model', (req, res) => {
+  res.json({ model: currentModel });
+});
+app.post('/api/model', async (req, res) => {
+  const { model } = req.body;
+  if (!model) return res.status(400).json({ error: 'model required' });
+  try {
+    const models = await fetchLmModels();
+    const found = models.find(m => m.id === model);
+    if (!found) return res.status(400).json({ error: 'modelo nao encontrado no LM Studio' });
+    currentModel = model;
+    console.log('[MODEL] trocado para: ' + currentModel);
+    res.json({ model: currentModel, state: found.state });
+  } catch (err) {
+    res.status(502).json({ error: 'LM Studio inacessivel: ' + err.message });
+  }
+});
+
 function sanitizeForTTS(text, maxLen = 500) {
   let t = text || '';
   t = t.replace(/```[\s\S]*?```/g, ''); // code blocks
