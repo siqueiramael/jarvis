@@ -175,6 +175,8 @@ const RAG_TRIGGERS = ['vault', 'anotei', 'salvei', 'registrei', 'sessão', 'sess
 // 7o-C: Detecta se a mensagem é um comando de action
 const ACTION_TRIGGERS = /(?:cria|crie|criar|faz|faça|faca)\s+(?:uma?\s+)?nota|(?:faz|faça|faca)\s+(?:um?\s+)?commit|(?:abre|abra|abrir|abre)\s+(?:o|a)?\s*\w+|(?:tira|tire|tirar|captura|capture)\s+(?:uma?\s+)?(?:screenshot|print|captura|foto\s+da\s+tela)|(?:executa|execute|roda|rode|rodar)\s+(?:o\s+)?(?:comando|command)/i;
 
+const QUESTION_GUARD = /\?|\b(?:como|quando|onde|qual|quais|quanto|quantos|quantas|por\s*que|porque|pra\s+que|para\s+que|o\s+que|que\s+tal|explica|explique|explicar|ensina|ensine|ensinar|tutorial|exemplo|exemplos|diferen[çc]a|me\s+ajuda|pode\s+me|poderia|consigo|d[áa]\s+pra)\b/i;
+
 const ACTION_INSTRUCTIONS = {
   nota: 'Responda APENAS com JSON: {"text":"confirmação curta","action":{"type":"create_note","params":{"title":"titulo da nota","content":"conteúdo gerado","folder":"Luma/Notas"}}}',
   commit: 'Responda APENAS com JSON: {"text":"confirmação curta","action":{"type":"git_commit","params":{"message":"mensagem do commit","path":"/opt/jarvis-v2"}}}',
@@ -724,7 +726,7 @@ app.post('/api/chat', async (req, res) => {
     }
   }
   // 7q: Action detection no chat
-  const isActionTurn = ACTION_TRIGGERS.test(cleanMessage);
+  const isActionTurn = ACTION_TRIGGERS.test(cleanMessage) && !QUESTION_GUARD.test(cleanMessage);
   if (isActionTurn) {
     const chatActionInst = getActionInstruction(cleanMessage);
     if (chatActionInst) {
@@ -733,6 +735,9 @@ app.post('/api/chat', async (req, res) => {
     }
   }
 
+  if (!isActionTurn) {
+    messages.push({ role: 'system', content: 'Neste turno você NÃO vai executar ações. Responda em português, em texto normal ou markdown (blocos de código para scripts). NUNCA responda em JSON nem use o formato {"text":...,"action":...}. Apenas explique, mostre o código ou converse.' });
+  }
   messages.push({ role: 'user', content: cleanMessage });
 
   // 7r: Streaming (SSE) - opt-in via header Accept; turnos de action caem no path JSON
@@ -834,7 +839,12 @@ app.post('/api/chat', async (req, res) => {
 
     // Executa action se existir
     if (action) {
-      actionResult = await executeAction(action);
+      actionResult = await Promise.race([
+        executeAction(action),
+        new Promise(r => setTimeout(() => r({ error: 'timeout: acao demorou mais de 15s' }), 15000))
+      ]);
+      if (actionResult?.success && actionResult.path) replyText += '\n\n📝 *Salvo em:* `' + actionResult.path + '`';
+      else if (actionResult?.error) replyText += '\n\n⚠️ *Ação falhou:* ' + actionResult.error;
     }
 
     // Salva no histórico da sessão
