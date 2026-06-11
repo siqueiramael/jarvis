@@ -93,6 +93,79 @@ window.updateModelBadge = function(model) {
   el.textContent = model;
 };
 
+function openModelPicker() {
+  const pill = document.getElementById('model-pill');
+  if (!pill) return;
+  if (document.getElementById('model-picker')) { closeModelPicker(); return; }
+  const picker = document.createElement('div');
+  picker.id = 'model-picker';
+  picker.className = 'specialist-picker';
+  const rect = pill.getBoundingClientRect();
+  picker.style.position = 'fixed';
+  picker.style.top = (rect.bottom + 8) + 'px';
+  picker.style.right = (window.innerWidth - rect.right) + 'px';
+  picker.style.left = 'auto';
+  picker.style.transform = 'none';
+  const loading = document.createElement('div');
+  loading.className = 'sp-option';
+  loading.innerHTML = '<span class="sp-info"><span class="sp-name">Carregando modelos...</span></span>';
+  picker.appendChild(loading);
+  document.body.appendChild(picker);
+  fetch('/api/models').then(function(r){ return r.json(); }).then(function(data) {
+    picker.innerHTML = '';
+    const current = data.current;
+    (data.models || []).forEach(function(m) {
+      const btn = document.createElement('button');
+      btn.className = 'sp-option';
+      if (m.id === current) btn.classList.add('sp-active');
+      const loaded = m.state === 'loaded';
+      const parts = [loaded ? 'carregado' : 'carregar'];
+      if (m.maxContext) parts.push(Math.round(m.maxContext / 1024) + 'k ctx');
+      if (m.quantization) parts.push(m.quantization);
+      const icon = (m.id === current) ? '✓' : '';
+      btn.innerHTML = '<span class="sp-icon">' + icon + '</span><span class="sp-info"><span class="sp-name">' + m.id + '</span><span class="sp-role">' + parts.join(' · ') + '</span></span>';
+      btn.addEventListener('click', function() {
+        const roleEl = btn.querySelector('.sp-role');
+        if (roleEl) roleEl.textContent = 'trocando...';
+        fetch('/api/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: m.id }) })
+          .then(function(r){ return r.json(); }).then(function(res) {
+            if (res.model && window.updateModelBadge) window.updateModelBadge(res.model);
+            closeModelPicker();
+          }).catch(function() { if (roleEl) roleEl.textContent = 'erro'; });
+      });
+      picker.appendChild(btn);
+    });
+  }).catch(function() {
+    picker.innerHTML = '<div class="sp-option"><span class="sp-info"><span class="sp-name">Erro ao carregar modelos</span></span></div>';
+  });
+  setTimeout(function() {
+    document.addEventListener('click', function handler(e) {
+      if (!e.target.closest('#model-picker') && !e.target.closest('#model-pill')) {
+        closeModelPicker();
+        document.removeEventListener('click', handler);
+      }
+    });
+  }, 50);
+}
+function closeModelPicker() {
+  const p = document.getElementById('model-picker');
+  if (p) p.remove();
+}
+(function initModelPill() {
+  function bind() {
+    const pill = document.getElementById('model-pill');
+    if (pill && !pill.dataset.bound) {
+      pill.dataset.bound = '1';
+      pill.style.cursor = 'pointer';
+      pill.title = 'Clique para trocar o modelo';
+      pill.addEventListener('click', function(e) { e.stopPropagation(); openModelPicker(); });
+    }
+    fetch('/api/model').then(function(r){ return r.json(); }).then(function(d) { if (d.model && window.updateModelBadge) window.updateModelBadge(d.model); }).catch(function() {});
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+  else bind();
+})();
+
 window.updateSpecialistBadge = function(specialist) {
   const display = document.getElementById('current-agent-display');
   if (!display) return;
