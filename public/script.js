@@ -1016,6 +1016,55 @@ function addDownloadCard(fileName, filePath) {
   terminal.scrollTop = terminal.scrollHeight;
 }
 
+// ========== SSE STREAMING (7r) ==========
+async function streamChat({ text, sessionId, onMeta, onDelta, onDone, onError }) {
+  let res;
+  try {
+    res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+      body: JSON.stringify({ message: text, sessionId: sessionId || 'default' })
+    });
+  } catch (err) { if (onError) onError(err.message); return; }
+
+  const ct = res.headers.get('content-type') || '';
+  if (!ct.includes('text/event-stream')) {
+    try {
+      const data = await res.json();
+      if (onMeta && data.specialistActive !== undefined) onMeta({ specialistActive: data.specialistActive });
+      if (data.reply) { if (onDelta) onDelta(data.reply); if (onDone) onDone(data.reply, data); }
+      else if (data.error) { if (onError) onError(data.error); }
+      else { if (onError) onError('Resposta inesperada'); }
+    } catch (err) { if (onError) onError(err.message); }
+    return;
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let full = '';
+  let ev = null;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n');
+      buffer = parts.pop();
+      for (const line of parts) {
+        if (line.startsWith('event:')) { ev = line.slice(6).trim(); continue; }
+        if (!line.startsWith('data:')) continue;
+        let obj;
+        try { obj = JSON.parse(line.slice(5).trim()); } catch { continue; }
+        if (ev === 'meta') { if (onMeta) onMeta(obj); }
+        else if (ev === 'delta') { full += obj.text; if (onDelta) onDelta(obj.text); }
+        else if (ev === 'done') { if (onDone) onDone(obj.reply != null ? obj.reply : full, obj); }
+        else if (ev === 'error') { if (onError) onError(obj.error); }
+      }
+    }
+  } catch (err) { if (onError) onError(err.message); }
+}
+
 // ========== MARKDOWN RENDERING ==========
 function renderMarkdown(text) {
   try {
@@ -3121,40 +3170,27 @@ initRealtimeBtn();
     // Avatar/Brain animação
     if (window.neuralTree) window.neuralTree.setState('thinking');
     
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, sessionId: window.lumaSessionId || 'default' })
-      });
-      
-      const data = await response.json();
-      
-      // Remove "pensando..."
-      if (thinkingLine && thinkingLine.parentNode) {
-        thinkingLine.parentNode.removeChild(thinkingLine);
+    let _amsg = null;
+    let _abuf = '';
+    const _ensureBubble = () => {
+      if (_amsg) return;
+      if (thinkingLine && thinkingLine.parentNode) thinkingLine.parentNode.removeChild(thinkingLine);
+      const _line = addTerminalLineV2('', 'jarvis-line');
+      _amsg = _line.querySelector('.msg');
+    };
+    await streamChat({
+      text,
+      sessionId: window.lumaSessionId || 'default',
+      onMeta: (m) => { if (window.updateSpecialistBadge) window.updateSpecialistBadge(m.specialistActive || null); },
+      onDelta: (d) => { _ensureBubble(); _abuf += d; _amsg.textContent = _abuf; terminal.scrollTop = terminal.scrollHeight; },
+      onDone: (reply) => { _ensureBubble(); _amsg.textContent = reply; terminal.scrollTop = terminal.scrollHeight; if (window.neuralTree) window.neuralTree.setState('idle'); },
+      onError: (e) => {
+        if (thinkingLine && thinkingLine.parentNode) thinkingLine.parentNode.removeChild(thinkingLine);
+        if (_amsg) _amsg.textContent = '❌ Erro: ' + e;
+        else addTerminalLineV2('❌ Erro: ' + e, 'error-line');
+        if (window.neuralTree) window.neuralTree.setState('idle');
       }
-      
-      // Adicionar resposta
-      if (window.updateSpecialistBadge) window.updateSpecialistBadge(data.specialistActive || null);
-      if (data.reply) {
-        addTerminalLineV2(data.reply, 'jarvis-line');
-      } else if (data.error) {
-        addTerminalLineV2('❌ Erro: ' + data.error, 'error-line');
-      } else {
-        addTerminalLineV2('❓ Resposta inesperada', 'error-line');
-      }
-      
-      // Brain volta pra idle
-      if (window.neuralTree) window.neuralTree.setState('idle');
-      
-    } catch (err) {
-      if (thinkingLine && thinkingLine.parentNode) {
-        thinkingLine.parentNode.removeChild(thinkingLine);
-      }
-      addTerminalLineV2('❌ Erro: ' + err.message, 'error-line');
-      if (window.neuralTree) window.neuralTree.setState('idle');
-    }
+    });
     
     chatInput.disabled = false;
     sendBtn.disabled = false;
@@ -3234,34 +3270,25 @@ initRealtimeBtn();
     // Mensagem "pensando..."
     const thinkLine = addMiniLine('⏳ Pensando...', 'system');
     
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, sessionId: window.lumaSessionId || 'default' })
-      });
-      
-      const data = await response.json();
-      
-      // Remove "pensando..."
-      if (thinkLine && thinkLine.parentNode) {
-        thinkLine.parentNode.removeChild(thinkLine);
+    let _amsg = null;
+    let _abuf = '';
+    const _ensureBubble = () => {
+      if (_amsg) return;
+      if (thinkLine && thinkLine.parentNode) thinkLine.parentNode.removeChild(thinkLine);
+      _amsg = addMiniLine('', 'assistant');
+    };
+    await streamChat({
+      text,
+      sessionId: window.lumaSessionId || 'default',
+      onMeta: (m) => { if (window.updateSpecialistBadge) window.updateSpecialistBadge(m.specialistActive || null); },
+      onDelta: (d) => { _ensureBubble(); _abuf += d; _amsg.textContent = _abuf; miniOutput.scrollTop = miniOutput.scrollHeight; },
+      onDone: (reply) => { _ensureBubble(); _amsg.textContent = reply; miniOutput.scrollTop = miniOutput.scrollHeight; },
+      onError: (e) => {
+        if (thinkLine && thinkLine.parentNode) thinkLine.parentNode.removeChild(thinkLine);
+        if (_amsg) _amsg.textContent = '❌ Erro: ' + e;
+        else addMiniLine('❌ Erro: ' + e, 'error');
       }
-      
-      // Adicionar resposta
-      if (window.updateSpecialistBadge) window.updateSpecialistBadge(data.specialistActive || null);
-      if (data.reply) {
-        addMiniLine(data.reply, 'assistant');
-      } else if (data.error) {
-        addMiniLine('❌ Erro: ' + data.error, 'error');
-      }
-      
-    } catch (err) {
-      if (thinkLine && thinkLine.parentNode) {
-        thinkLine.parentNode.removeChild(thinkLine);
-      }
-      addMiniLine('❌ Erro: ' + err.message, 'error');
-    }
+    });
     
     miniInput.disabled = false;
     miniSend.disabled = false;
