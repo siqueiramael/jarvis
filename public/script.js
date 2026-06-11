@@ -3272,6 +3272,7 @@ initRealtimeBtn();
     
     let _amsg = null;
     let _abuf = '';
+    let _last = 0;
     const _ensureBubble = () => {
       if (_amsg) return;
       if (thinkLine && thinkLine.parentNode) thinkLine.parentNode.removeChild(thinkLine);
@@ -3281,8 +3282,8 @@ initRealtimeBtn();
       text,
       sessionId: window.lumaSessionId || 'default',
       onMeta: (m) => { if (window.updateSpecialistBadge) window.updateSpecialistBadge(m.specialistActive || null); },
-      onDelta: (d) => { _ensureBubble(); _abuf += d; _amsg.textContent = _abuf; miniOutput.scrollTop = miniOutput.scrollHeight; },
-      onDone: (reply) => { _ensureBubble(); _amsg.textContent = reply; miniOutput.scrollTop = miniOutput.scrollHeight; },
+      onDelta: (d) => { _ensureBubble(); _abuf += d; const _now = Date.now(); if (_now - _last > 60) { _amsg.innerHTML = renderMarkdown(_abuf); _last = _now; miniOutput.scrollTop = miniOutput.scrollHeight; } },
+      onDone: (reply) => { _ensureBubble(); _amsg.innerHTML = renderMarkdown(reply); miniOutput.scrollTop = miniOutput.scrollHeight; },
       onError: (e) => {
         if (thinkLine && thinkLine.parentNode) thinkLine.parentNode.removeChild(thinkLine);
         if (_amsg) _amsg.textContent = '❌ Erro: ' + e;

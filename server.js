@@ -774,7 +774,7 @@ app.post('/api/chat', async (req, res) => {
           } catch { /* chunk SSE parcial - ignora */ }
         }
       }
-      const replyText = fullText.replace(/<0x[0-9A-Fa-f]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      const replyText = fullText.replace(/<0x[0-9A-Fa-f]+>/g, ' ').replace(/[^\S\n]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
       session.messages.push({ role: 'user', content: cleanMessage });
       session.messages.push({ role: 'assistant', content: replyText });
       if (!session.specialistHistory) session.specialistHistory = [];
@@ -828,7 +828,7 @@ app.post('/api/chat', async (req, res) => {
     } catch { /* resposta normal em texto */ }
 
     // Limpa tokens hex do LLM (ex: <0x0A> → espaço)
-    replyText = replyText.replace(/<0x[0-9A-Fa-f]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    replyText = replyText.replace(/<0x[0-9A-Fa-f]+>/g, ' ').replace(/[^\S\n]+/g, ' ').replace(/ *\n */g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 
     // Executa action se existir
     if (action) {
