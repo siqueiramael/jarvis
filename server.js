@@ -723,7 +723,8 @@ app.post('/api/chat', async (req, res) => {
     }
   }
   // 7q: Action detection no chat
-  if (ACTION_TRIGGERS.test(cleanMessage)) {
+  const isActionTurn = ACTION_TRIGGERS.test(cleanMessage);
+  if (isActionTurn) {
     const chatActionInst = getActionInstruction(cleanMessage);
     if (chatActionInst) {
       messages.push({ role: 'system', content: chatActionInst });
@@ -732,6 +733,62 @@ app.post('/api/chat', async (req, res) => {
   }
 
   messages.push({ role: 'user', content: cleanMessage });
+
+  // 7r: Streaming (SSE) - opt-in via header Accept; turnos de action caem no path JSON
+  const wantsStream = (req.headers.accept || '').includes('text/event-stream') && !isActionTurn;
+  if (wantsStream) {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders?.();
+    const sse = (event, payload) => res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+    sse('meta', { agent: currentAgent?.name, ragUsed: ragActive || ragUsedAuto, sessionId, specialistActive });
+    let fullText = '';
+    try {
+      const response = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: process.env.LM_STUDIO_MODEL, messages, temperature: 0.7, max_tokens: 1200, stream: true })
+      });
+      if (!response.ok) {
+        const errTxt = await response.text();
+        sse('error', { error: `LM Studio ${response.status}: ${errTxt.slice(0, 200)}` });
+        res.end();
+        return;
+      }
+      const decoder = new TextDecoder();
+      let buffer = '';
+      for await (const chunk of response.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        const parts = buffer.split('\n');
+        buffer = parts.pop();
+        for (const line of parts) {
+          const t = line.trim();
+          if (!t.startsWith('data:')) continue;
+          const data = t.slice(5).trim();
+          if (data === '[DONE]') continue;
+          try {
+            const delta = JSON.parse(data).choices?.[0]?.delta?.content || '';
+            if (delta) { fullText += delta; sse('delta', { text: delta }); }
+          } catch { /* chunk SSE parcial - ignora */ }
+        }
+      }
+      const replyText = fullText.replace(/<0x[0-9A-Fa-f]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      session.messages.push({ role: 'user', content: cleanMessage });
+      session.messages.push({ role: 'assistant', content: replyText });
+      if (!session.specialistHistory) session.specialistHistory = [];
+      session.specialistHistory.push(specialistActive?.id || null);
+      if (session.specialistHistory.length > 10) session.specialistHistory = session.specialistHistory.slice(-10);
+      sse('done', { reply: replyText });
+      res.end();
+    } catch (err) {
+      console.error('[CHAT-SSE] Erro:', err.message);
+      sse('error', { error: err.message });
+      res.end();
+    }
+    return;
+  }
   
   try {
     const response = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
