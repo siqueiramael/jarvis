@@ -28,6 +28,7 @@ let agentsList = [];
 // SESSION STORE — histórico de conversa
 // ============================================
 const sessionStore = new Map();
+let currentModel = process.env.LM_STUDIO_MODEL;
 const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 min idle → auto-save
 const SESSION_MAX_HISTORY = 20; // últimas 20 mensagens no contexto
 
@@ -735,6 +736,7 @@ app.post('/api/chat', async (req, res) => {
   messages.push({ role: 'user', content: cleanMessage });
 
   // 7r: Streaming (SSE) - opt-in via header Accept; turnos de action caem no path JSON
+  console.log('[CHAT] modelo=' + currentModel + ' agente=' + (specialistActive?.id || 'generic'));
   const wantsStream = (req.headers.accept || '').includes('text/event-stream') && !isActionTurn;
   if (wantsStream) {
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -743,13 +745,13 @@ app.post('/api/chat', async (req, res) => {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders?.();
     const sse = (event, payload) => res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
-    sse('meta', { agent: currentAgent?.name, ragUsed: ragActive || ragUsedAuto, sessionId, specialistActive });
+    sse('meta', { model: currentModel, agent: currentAgent?.name, ragUsed: ragActive || ragUsedAuto, sessionId, specialistActive });
     let fullText = '';
     try {
       const response = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: process.env.LM_STUDIO_MODEL, messages, temperature: 0.7, max_tokens: 1200, stream: true })
+        body: JSON.stringify({ model: currentModel, messages, temperature: 0.7, max_tokens: 1200, stream: true })
       });
       if (!response.ok) {
         const errTxt = await response.text();
@@ -795,7 +797,7 @@ app.post('/api/chat', async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: process.env.LM_STUDIO_MODEL,
+        model: currentModel,
         messages,
         temperature: 0.7,
         max_tokens: 1200
@@ -843,7 +845,7 @@ app.post('/api/chat', async (req, res) => {
     session.specialistHistory.push(specialistActive?.id && !specialistActive.persisted ? specialistActive.id : (specialistActive?.persisted ? specialistActive.id : null));
     if (session.specialistHistory.length > 10) session.specialistHistory = session.specialistHistory.slice(-10);
 
-    res.json({ reply: replyText, action, actionResult, agent: currentAgent?.name, ragUsed: ragActive || ragUsedAuto, sessionId, specialistActive });
+    res.json({ reply: replyText, action, actionResult, model: currentModel, agent: currentAgent?.name, ragUsed: ragActive || ragUsedAuto, sessionId, specialistActive });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

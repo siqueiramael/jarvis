@@ -1031,7 +1031,7 @@ async function streamChat({ text, sessionId, onMeta, onDelta, onDone, onError })
   if (!ct.includes('text/event-stream')) {
     try {
       const data = await res.json();
-      if (onMeta && data.specialistActive !== undefined) onMeta({ specialistActive: data.specialistActive });
+      if (onMeta && data.specialistActive !== undefined) onMeta({ specialistActive: data.specialistActive, model: data.model });
       if (data.reply) { if (onDelta) onDelta(data.reply); if (onDone) onDone(data.reply, data); }
       else if (data.error) { if (onError) onError(data.error); }
       else { if (onError) onError('Resposta inesperada'); }
@@ -3181,7 +3181,7 @@ initRealtimeBtn();
     await streamChat({
       text,
       sessionId: window.lumaSessionId || 'default',
-      onMeta: (m) => { if (window.updateSpecialistBadge) window.updateSpecialistBadge(m.specialistActive || null); },
+      onMeta: (m) => { if (window.updateSpecialistBadge) window.updateSpecialistBadge(m.specialistActive || null); if (window.updateModelBadge) window.updateModelBadge(m.model); },
       onDelta: (d) => { _ensureBubble(); _abuf += d; _amsg.textContent = _abuf; terminal.scrollTop = terminal.scrollHeight; },
       onDone: (reply) => { _ensureBubble(); _amsg.textContent = reply; terminal.scrollTop = terminal.scrollHeight; if (window.neuralTree) window.neuralTree.setState('idle'); },
       onError: (e) => {
@@ -3281,7 +3281,7 @@ initRealtimeBtn();
     await streamChat({
       text,
       sessionId: window.lumaSessionId || 'default',
-      onMeta: (m) => { if (window.updateSpecialistBadge) window.updateSpecialistBadge(m.specialistActive || null); },
+      onMeta: (m) => { if (window.updateSpecialistBadge) window.updateSpecialistBadge(m.specialistActive || null); if (window.updateModelBadge) window.updateModelBadge(m.model); },
       onDelta: (d) => { _ensureBubble(); _abuf += d; const _now = Date.now(); if (_now - _last > 60) { _amsg.innerHTML = renderMarkdown(_abuf); _last = _now; miniOutput.scrollTop = miniOutput.scrollHeight; } },
       onDone: (reply) => { _ensureBubble(); _amsg.innerHTML = renderMarkdown(reply); miniOutput.scrollTop = miniOutput.scrollHeight; },
       onError: (e) => {

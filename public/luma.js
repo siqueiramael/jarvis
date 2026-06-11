@@ -87,6 +87,12 @@ const SPECIALIST_OPTIONS = [
   { id: 'pm',            mention: '@morgan', icon: '📋', name: 'Morgan', role: 'PM'            },
 ];
 
+window.updateModelBadge = function(model) {
+  const el = document.getElementById('current-model-display');
+  if (!el || !model) return;
+  el.textContent = model;
+};
+
 window.updateSpecialistBadge = function(specialist) {
   const display = document.getElementById('current-agent-display');
   if (!display) return;
