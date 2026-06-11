@@ -605,3 +605,35 @@ body {
 .sidebar-footer-status {
   opacity: 0.5;
 }
+
+
+/* code-blocks-mini */
+#chat-mini-output pre {
+  position: relative;
+  background: #15152a;
+  color: #e8e8f4;
+  padding: 12px 14px;
+  border-radius: 8px;
+  overflow-x: auto;
+  max-width: 100%;
+  margin: 8px 0;
+  font-family: 'SF Mono', Consolas, 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  border: 1px solid rgba(139, 92, 246, 0.28);
+}
+#chat-mini-output pre code { background: none; padding: 0; white-space: pre; color: inherit; }
+#chat-mini-output code {
+  background: rgba(139, 92, 246, 0.18);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: 'SF Mono', Consolas, 'Courier New', monospace;
+  font-size: 0.9em;
+}
+#chat-mini-output .code-copy-btn {
+  position: absolute; top: 6px; right: 6px;
+  background: rgba(139, 92, 246, 0.9); color: #fff;
+  border: none; border-radius: 5px; padding: 3px 9px;
+  font-size: 11px; cursor: pointer; opacity: 0.7; transition: opacity 0.15s;
+}
+#chat-mini-output .code-copy-btn:hover { opacity: 1; }

@@ -751,7 +751,7 @@ app.post('/api/chat', async (req, res) => {
       const response = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: currentModel, messages, temperature: 0.7, max_tokens: 1200, stream: true })
+        body: JSON.stringify({ model: currentModel, messages, temperature: 0.7, max_tokens: 4096, stream: true })
       });
       if (!response.ok) {
         const errTxt = await response.text();
@@ -800,7 +800,7 @@ app.post('/api/chat', async (req, res) => {
         model: currentModel,
         messages,
         temperature: 0.7,
-        max_tokens: 1200
+        max_tokens: 4096
       })
     });
     const data = await response.json();

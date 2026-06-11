@@ -1092,12 +1092,12 @@ function addCopyButtons(container) {
     pre.style.position = 'relative';
     const btn = document.createElement('button');
     btn.className = 'code-copy-btn';
-    btn.textContent = 'Copy';
+    btn.textContent = 'Copiar';
     btn.onclick = () => {
       const code = pre.querySelector('code')?.textContent || pre.textContent;
       navigator.clipboard.writeText(code);
-      btn.textContent = 'Copied!';
-      setTimeout(() => btn.textContent = 'Copy', 1500);
+      btn.textContent = 'Copiado!';
+      setTimeout(() => btn.textContent = 'Copiar', 1500);
     };
     pre.appendChild(btn);
   });
@@ -3283,7 +3283,7 @@ initRealtimeBtn();
       sessionId: window.lumaSessionId || 'default',
       onMeta: (m) => { if (window.updateSpecialistBadge) window.updateSpecialistBadge(m.specialistActive || null); if (window.updateModelBadge) window.updateModelBadge(m.model); },
       onDelta: (d) => { _ensureBubble(); _abuf += d; const _now = Date.now(); if (_now - _last > 60) { _amsg.innerHTML = renderMarkdown(_abuf); _last = _now; miniOutput.scrollTop = miniOutput.scrollHeight; } },
-      onDone: (reply) => { _ensureBubble(); _amsg.innerHTML = renderMarkdown(reply); miniOutput.scrollTop = miniOutput.scrollHeight; },
+      onDone: (reply) => { _ensureBubble(); _amsg.innerHTML = renderMarkdown(reply); if (typeof addCopyButtons === 'function') addCopyButtons(_amsg); miniOutput.scrollTop = miniOutput.scrollHeight; },
       onError: (e) => {
         if (thinkLine && thinkLine.parentNode) thinkLine.parentNode.removeChild(thinkLine);
         if (_amsg) _amsg.textContent = '❌ Erro: ' + e;
