@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0F0A1E">
+<title>Luma · Admin</title>
+<style>
+  :root{--bg:#0F0A1E;--panel:#1A1230;--panel2:#241a40;--violet:#8B5CF6;--violet-soft:#a78bfa;--text:#E8E3F5;--muted:#9b91b8;--danger:#f87171;--ok:#34d399;--warn:#fbbf24;--border:#2e2350}
+  *{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(1200px 600px at 50% -10%,#1b1138 0%,var(--bg) 60%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px}
+  .wrap{max-width:880px;margin:0 auto}
+  header{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px}
+  .logo{font-weight:700;letter-spacing:.4em;font-size:18px;background:linear-gradient(90deg,var(--violet-soft),var(--violet));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .logo small{font-weight:600;letter-spacing:normal;-webkit-text-fill-color:var(--muted);margin-left:8px;font-size:13px}
+  .top-links a,.top-links button{color:var(--violet-soft);background:none;border:0;cursor:pointer;font-size:13px;text-decoration:none;margin-left:14px}
+  .card{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--border);border-radius:16px;padding:22px;margin-bottom:20px}
+  h2{font-size:15px;margin:0 0 16px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  input{padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:#150e2a;color:var(--text);font-size:14px;outline:none;width:90px}
+  input:focus{border-color:var(--violet)}
+  button.primary{padding:10px 16px;border:0;border-radius:10px;cursor:pointer;font-weight:600;color:#fff;background:linear-gradient(90deg,var(--violet),#6d3df0)}
+  button.primary:hover{filter:brightness(1.08)}
+  button.ghost{padding:6px 12px;border:1px solid var(--border);border-radius:8px;background:transparent;color:var(--text);cursor:pointer;font-size:13px}
+  button.ghost:hover{border-color:var(--violet)}
+  .urlbox{margin-top:14px;padding:12px;border-radius:10px;background:#150e2a;border:1px solid var(--border);display:none;align-items:center;gap:10px;word-break:break-all;font-size:13px}
+  table{width:100%;border-collapse:collapse;margin-top:6px;font-size:13px}
+  th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--border)}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  .badge{padding:2px 9px;border-radius:999px;font-size:11px;font-weight:600}
+  .b-valid{background:rgba(52,211,153,.15);color:var(--ok)}
+  .b-used{background:rgba(155,145,184,.15);color:var(--muted)}
+  .b-expired{background:rgba(251,191,36,.15);color:var(--warn)}
+  .b-active{background:rgba(52,211,153,.15);color:var(--ok)}
+  .b-inactive{background:rgba(248,113,113,.15);color:var(--danger)}
+  .b-owner{background:rgba(139,92,246,.18);color:var(--violet-soft)}
+  .empty{color:var(--muted);font-size:13px;padding:10px 0}
+  .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo">L·U·M·A <small>Admin</small></div>
+      <div class="top-links"><a href="/">← App</a><button id="logout">Sair</button></div>
+    </header>
+    <div class="card">
+      <h2>Convites</h2>
+      <div class="row">
+        <label class="mono">TTL (h)</label>
+        <input id="ttl" type="number" value="48" min="1" max="720">
+        <button class="primary" id="gen">Gerar convite</button>
+      </div>
+      <div class="urlbox" id="urlbox"><span id="urltext"></span><button class="ghost" id="copy">Copiar</button></div>
+      <table><thead><tr><th>Token</th><th>Estado</th><th>Expira</th><th></th></tr></thead><tbody id="invites-body"></tbody></table>
+      <div class="empty" id="invites-empty" style="display:none">Nenhum convite.</div>
+    </div>
+    <div class="card">
+      <h2>Usuários</h2>
+      <table><thead><tr><th>Usuário</th><th>Papel</th><th>Estado</th><th></th></tr></thead><tbody id="users-body"></tbody></table>
+    </div>
+  </div>
+<script>
+  const $ = id => document.getElementById(id);
+  let ME = null;
+  function fmt(d){ if(!d) return '—'; try { return new Date(d).toLocaleString('pt-BR'); } catch(e){ return d; } }
+  async function loadInvites(){
+    const r = await fetch('/api/invites'); const d = await r.json();
+    const body = $('invites-body'); body.innerHTML='';
+    const list = (d.invites||[]).slice().reverse();
+    $('invites-empty').style.display = list.length ? 'none' : 'block';
+    for(const i of list){
+      const tr = document.createElement('tr');
+      const cls = {valid:'b-valid',used:'b-used',expired:'b-expired'}[i.state]||'b-used';
+      tr.innerHTML = '<td class="mono">'+i.token.slice(0,12)+'…</td><td><span class="badge '+cls+'">'+i.state+'</span></td><td class="mono">'+fmt(i.expiresAt)+'</td><td></td>';
+      const td = tr.lastChild;
+      if(i.state!=='used'){
+        const b=document.createElement('button'); b.className='ghost'; b.textContent='Revogar';
+        b.onclick=async()=>{ if(!confirm('Revogar este convite?'))return; await fetch('/api/invites/'+encodeURIComponent(i.token),{method:'DELETE'}); loadInvites(); };
+        td.appendChild(b);
+      }
+      body.appendChild(tr);
+    }
+  }
+  async function loadUsers(){
+    const r = await fetch('/api/users'); const d = await r.json();
+    const body = $('users-body'); body.innerHTML='';
+    for(const u of (d.users||[])){
+      const tr=document.createElement('tr');
+      const roleBadge = u.role==='owner' ? '<span class="badge b-owner">owner</span>' : 'user';
+      const stBadge = u.active ? '<span class="badge b-active">ativo</span>' : '<span class="badge b-inactive">inativo</span>';
+      tr.innerHTML = '<td>'+u.displayName+' <span class="mono">@'+u.username+'</span></td><td>'+roleBadge+'</td><td>'+stBadge+'</td><td></td>';
+      const td=tr.lastChild; const self = ME && ME.id===u.id;
+      if(u.role!=='owner' && !self){
+        const b=document.createElement('button'); b.className='ghost'; b.textContent=u.active?'Desativar':'Ativar';
+        b.onclick=async()=>{ await fetch('/api/users/'+u.id+'/toggle-active',{method:'POST'}); loadUsers(); };
+        td.appendChild(b);
+      }
+      body.appendChild(tr);
+    }
+  }
+  $('gen').onclick = async ()=>{
+    const ttl = parseInt($('ttl').value,10)||48;
+    const r = await fetch('/api/invites',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ttlHours:ttl})});
+    const d = await r.json();
+    if(d.url){ $('urltext').textContent=d.url; $('urlbox').style.display='flex'; loadInvites(); }
+  };
+  $('copy').onclick = ()=>{ navigator.clipboard.writeText($('urltext').textContent).catch(()=>{}); $('copy').textContent='Copiado!'; setTimeout(()=>$('copy').textContent='Copiar',1500); };
+  $('logout').onclick = async ()=>{ try{await fetch('/api/logout',{method:'POST'});}catch(e){} location.href='/login'; };
+  (async()=>{ try{ const r=await fetch('/api/me'); ME = r.ok? await r.json():null; }catch(e){} loadInvites(); loadUsers(); })();
+</script>
+</body>
+</html>

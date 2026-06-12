@@ -52,6 +52,13 @@ app.get('/login', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'login.html'));
 });
 
+app.get('/admin', (req, res) => {
+  if (!req.session || !req.session.userId) return res.redirect('/login');
+  const u = loadUsers().find(x => x.id === req.session.userId);
+  if (!u || u.role !== 'owner') return res.redirect('/');
+  res.sendFile(join(__dirname, 'public', 'admin.html'));
+});
+
 const PUBLIC_PATHS = new Set(['/login', '/api/login', '/api/logout', '/api/me', '/api/register']);
 const PUBLIC_PREFIXES = ['/invite/', '/api/invite-check/'];
 function isPublic(p) {
@@ -145,6 +152,46 @@ app.post('/api/invites', requireOwner, (req, res) => {
     const base = process.env.PUBLIC_BASE_URL || (req.protocol + '://' + req.get('host'));
     res.json({ ok: true, url: base + '/invite/' + token, token, expiresAt: invite.expiresAt, ttlHours: ttl });
   } catch (e) { console.error('[INVITE] mint erro:', e.message); res.status(500).json({ error: 'erro interno' }); }
+});
+
+// Listar convites (owner)
+app.get('/api/invites', requireOwner, (req, res) => {
+  const base = process.env.PUBLIC_BASE_URL || (req.protocol + '://' + req.get('host'));
+  const list = loadInvites().map(i => ({
+    token: i.token, url: base + '/invite/' + i.token, state: inviteState(i),
+    createdAt: i.createdAt, expiresAt: i.expiresAt, usedBy: i.usedBy || null,
+  }));
+  res.json({ invites: list });
+});
+
+// Revogar convite (owner) — deleta o token
+app.delete('/api/invites/:token', requireOwner, (req, res) => {
+  const list = loadInvites();
+  const idx = list.findIndex(i => i.token === req.params.token);
+  if (idx === -1) return res.status(404).json({ error: 'convite nao encontrado' });
+  list.splice(idx, 1); saveInvites(list);
+  res.json({ ok: true });
+});
+
+// Listar usuarios (owner) — sem passwordHash
+app.get('/api/users', requireOwner, (req, res) => {
+  const list = loadUsers().map(u => ({
+    id: u.id, username: u.username, role: u.role, active: u.active !== false,
+    displayName: (u.profile && u.profile.displayName) || u.username, createdAt: u.createdAt,
+  }));
+  res.json({ users: list });
+});
+
+// Ativar/desativar usuario (owner) — nunca o owner nem a si mesmo
+app.post('/api/users/:id/toggle-active', requireOwner, (req, res) => {
+  const users = loadUsers();
+  const u = users.find(x => x.id === req.params.id);
+  if (!u) return res.status(404).json({ error: 'usuario nao encontrado' });
+  if (u.role === 'owner') return res.status(400).json({ error: 'nao pode desativar o owner' });
+  if (u.id === req.session.userId) return res.status(400).json({ error: 'nao pode desativar a si mesmo' });
+  u.active = u.active === false ? true : false;
+  saveUsers(users);
+  res.json({ ok: true, id: u.id, active: u.active });
 });
 
 app.get('/api/invite-check/:token', (req, res) => {

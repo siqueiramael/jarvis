@@ -30,8 +30,24 @@
     <div class="sidebar-footer">
       <button class="sidebar-footer-btn" id="sidebar-memory-btn" title="Memória">🧠 Memória</button>
       <button class="sidebar-footer-btn" id="sidebar-config-btn" title="Configurações">⚙️</button>
+      <button class="sidebar-footer-btn" id="sidebar-admin-btn" title="Admin" style="display:none">🛡️ Admin</button>
+      <button class="sidebar-footer-btn" id="sidebar-logout-btn" title="Sair">🚪 Sair</button>
     </div>
   </aside>
+  <script>
+    (function(){
+      var lo = document.getElementById('sidebar-logout-btn');
+      if (lo) lo.addEventListener('click', async function(){
+        try { await fetch('/api/logout', { method: 'POST' }); } catch(e){}
+        window.location.href = '/login';
+      });
+      var ad = document.getElementById('sidebar-admin-btn');
+      if (ad) ad.addEventListener('click', function(){ window.location.href = '/admin'; });
+      fetch('/api/me').then(function(r){ return r.ok ? r.json() : null; }).then(function(u){
+        if (u && u.role === 'owner' && ad) ad.style.display = '';
+      }).catch(function(){});
+    })();
+  </script>
 
   <!-- OVERLAY mobile -->
   <div class="drawer-overlay" id="drawer-overlay"></div>
