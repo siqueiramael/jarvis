@@ -29,6 +29,13 @@ let agentsList = [];
 // ============================================
 const sessionStore = new Map();
 let currentModel = process.env.LM_STUDIO_MODEL;
+const CHAT_TOK_CEIL = parseInt(process.env.CHAT_MAX_TOKENS_CEIL || '8192', 10);
+const CHAT_TOK_FLOOR = 512;
+function tokenBudget(ctx) {
+  const c = Number(ctx) || 8192;
+  return Math.max(CHAT_TOK_FLOOR, Math.min(CHAT_TOK_CEIL, Math.floor(c * 0.5)));
+}
+let currentModelTokens = tokenBudget(8192);
 const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 min idle → auto-save
 const SESSION_MAX_HISTORY = 20; // últimas 20 mensagens no contexto
 
@@ -741,7 +748,7 @@ app.post('/api/chat', async (req, res) => {
   messages.push({ role: 'user', content: cleanMessage });
 
   // 7r: Streaming (SSE) - opt-in via header Accept; turnos de action caem no path JSON
-  console.log('[CHAT] modelo=' + currentModel + ' agente=' + (specialistActive?.id || 'generic'));
+  console.log('[CHAT] modelo=' + currentModel + ' agente=' + (specialistActive?.id || 'generic') + ' tok=' + currentModelTokens);
   const wantsStream = (req.headers.accept || '').includes('text/event-stream') && !isActionTurn;
   if (wantsStream) {
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -756,7 +763,7 @@ app.post('/api/chat', async (req, res) => {
       const response = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: currentModel, messages, temperature: 0.7, max_tokens: 4096, stream: true })
+        body: JSON.stringify({ model: currentModel, messages, temperature: 0.7, max_tokens: currentModelTokens, stream: true })
       });
       if (!response.ok) {
         const errTxt = await response.text();
@@ -805,7 +812,7 @@ app.post('/api/chat', async (req, res) => {
         model: currentModel,
         messages,
         temperature: 0.7,
-        max_tokens: 4096
+        max_tokens: currentModelTokens
       })
     });
     const data = await response.json();
@@ -899,7 +906,8 @@ app.post('/api/model', async (req, res) => {
     const found = models.find(m => m.id === model);
     if (!found) return res.status(400).json({ error: 'modelo nao encontrado no LM Studio' });
     currentModel = model;
-    console.log('[MODEL] trocado para: ' + currentModel);
+    currentModelTokens = tokenBudget(found.loaded_context_length || 8192);
+    console.log('[MODEL] trocado para: ' + currentModel + ' (max_tokens=' + currentModelTokens + ')');
     res.json({ model: currentModel, state: found.state });
   } catch (err) {
     res.status(502).json({ error: 'LM Studio inacessivel: ' + err.message });
