@@ -7,6 +7,8 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import dotenv from 'dotenv';
 import multer from 'multer';
+import mammoth from 'mammoth';
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import session from 'express-session';
 import FileStoreFactory from 'session-file-store';
 import bcrypt from 'bcryptjs';
@@ -418,6 +420,40 @@ app.post('/api/capabilities/:key/toggle', requireOwner, (req, res) => {
   const desired = (req.body && typeof req.body.enabled === 'boolean') ? req.body.enabled : !isCapabilityEnabled(key);
   const state = setCapability(key, desired);
   res.json({ ok: true, key: key, enabled: state[key] === true });
+});
+
+// ===== Frente 2.2: doc-reader (upload + extracao + vault privado) =====
+const docUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const DOC_EXTRACTORS = {
+  '.txt': (buf) => buf.toString('utf-8'),
+  '.md': (buf) => buf.toString('utf-8'),
+  '.xml': (buf) => buf.toString('utf-8'),
+  '.csv': (buf) => buf.toString('utf-8'),
+  '.json': (buf) => buf.toString('utf-8'),
+  '.pdf': async (buf) => (await pdfParse(buf)).text,
+  '.docx': async (buf) => (await mammoth.extractRawText({ buffer: buf })).value,
+};
+app.post('/api/docs/upload', requireCapability('doc_reader'), docUpload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'arquivo (campo file) obrigatorio' });
+    const orig = req.file.originalname || 'arquivo';
+    const ext = ('.' + (orig.split('.').pop() || '')).toLowerCase();
+    const extractor = DOC_EXTRACTORS[ext];
+    if (!extractor) return res.status(415).json({ error: 'tipo nao suportado: ' + ext });
+    let text = await extractor(req.file.buffer);
+    text = (text || '').trim();
+    if (!text) return res.status(422).json({ error: 'nao foi possivel extrair texto' });
+    const docsDir = join(__dirname, 'data', 'vaults', req.session.userId, 'Documentos');
+    mkdirSync(docsDir, { recursive: true });
+    const base = orig.replace(/\.[^.]+$/, '').replace(/[^\w.\- ]+/g, '_').trim() || 'documento';
+    const notePath = join(docsDir, base + '.md');
+    const header = '# ' + orig + '\n\n> Documento enviado em ' + new Date().toISOString() + '\n\n';
+    writeFileSync(notePath, header + text, 'utf-8');
+    res.json({ ok: true, name: orig, chars: text.length, saved: 'Documentos/' + base + '.md' });
+  } catch (err) {
+    console.error('[DOCS] Erro:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 function isStrongPassword(pw) {
   return typeof pw === 'string' && pw.length >= 8 && /[A-Z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw);
@@ -1016,6 +1052,7 @@ async function loadAgents() {
   }
 }
 
+function stripAccents(s) { return s.normalize('NFD').replace(/[\u0300-\u036f]/g, ''); }
 async function searchNotes(searchTerm, userId) {
   const results = [];
   async function walkDir(dir, root) {
@@ -1027,11 +1064,11 @@ async function searchNotes(searchTerm, userId) {
       } else if (entry.name.endsWith('.md')) {
         const content = await readFile(fullPath, 'utf-8');
         const relativePath = fullPath.replace(root + '/', '');
-        if (content.toLowerCase().includes(searchTerm.toLowerCase())) {
+        if (stripAccents(content.toLowerCase()).includes(stripAccents(searchTerm.toLowerCase()))) {
           const titleMatch = content.match(/^#\s+(.+)$/m);
           const title = titleMatch ? titleMatch[1] : entry.name.replace('.md', '');
           const lines = content.split('\n');
-          const matchLine = lines.find(l => l.toLowerCase().includes(searchTerm.toLowerCase()));
+          const matchLine = lines.find(l => stripAccents(l.toLowerCase()).includes(stripAccents(searchTerm.toLowerCase())));
           const snippet = matchLine ? matchLine.substring(0, 200) : lines.slice(0, 3).join(' ').substring(0, 200);
           results.push({ path: relativePath, title, snippet: snippet + '...' });
         }
@@ -1304,7 +1341,7 @@ app.post('/api/chat', async (req, res) => {
   }
   // RAG manual (frontend pediu) ou auto-RAG (trigger detectado)
   let ragUsedAuto = false;
-  const autoRAG = shouldAutoRAG(cleanMessage);
+  const autoRAG = shouldAutoRAG(cleanMessage) || isCapabilityEnabled('doc_reader');
   const ragActive = useRAG && searchQuery;
 
   if (ragActive || autoRAG) {
