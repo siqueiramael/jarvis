@@ -16,7 +16,7 @@ services:
       TAILSCALE_VPS_IP: 100.114.78.91
       TAILSCALE_WINDOWS_IP: 100.112.73.46
     volumes:
-      - ./data/obsidian-vault:/app/data/obsidian-vault
+      - ./data:/app/data
       - ./logs:/app/logs
       - ./whisper.cpp:/app/whisper.cpp
       - ./piper-tts:/app/piper-tts

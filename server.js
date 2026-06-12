@@ -22,7 +22,7 @@ const PORT = process.env.PORT || 3000;
 const upload = multer({ dest: '/tmp/' });
 
 app.use(express.json());
-app.use(express.static(join(__dirname, 'public')));
+// [S2] static movido para depois do guard
 
 // ============================================
 // AUTH — sessao + login (patch S1; NAO tranca o app ainda)
@@ -41,6 +41,24 @@ app.use(session({
   rolling: true,
   cookie: { httpOnly: true, secure: true, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 24 * 30 },
 }));
+
+// ============================================
+// LOGIN PAGE + GUARD (patch S2 — app TRANCADO)
+// ============================================
+app.get('/login', (req, res) => {
+  if (req.session && req.session.userId) return res.redirect('/');
+  res.sendFile(join(__dirname, 'public', 'login.html'));
+});
+
+const PUBLIC_PATHS = new Set(['/login', '/api/login', '/api/logout', '/api/me']);
+
+app.use((req, res, next) => {
+  if (PUBLIC_PATHS.has(req.path) || (req.session && req.session.userId)) return next();
+  if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'nao autenticado' });
+  return res.redirect('/login');
+});
+
+app.use(express.static(join(__dirname, 'public')));
 
 function loadUsers() {
   try {
