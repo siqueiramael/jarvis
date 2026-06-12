@@ -262,6 +262,77 @@ app.post('/api/coder/tool', requireOwner, (req, res) => {
   const r = runCoderTool(tool, args, { ws, userId: req.session.userId });
   res.json({ tool, ok: r.ok, result: r.result });
 });
+
+// ===== Frente 1.3: Loop agentico (coder/run) =====
+const CODER_MODEL = process.env.CODER_MODEL || 'qwen2.5-coder-7b-instruct';
+const CODER_MAX_STEPS = parseInt(process.env.CODER_MAX_STEPS || '12', 10);
+const CODER_SYSTEM = `Voce e a Luma em modo agente de programacao. Voce trabalha dentro de um workspace isolado (sandbox) e tem ferramentas para inspecionar e editar arquivos: read_file, list_dir, grep, write_file. Os caminhos sao sempre relativos ao workspace.
+
+Regras:
+- Trabalhe passo a passo. Use as ferramentas para descobrir o estado real dos arquivos antes de editar; nao invente conteudo.
+- Use o resultado de cada ferramenta para decidir o proximo passo.
+- Quando a tarefa estiver concluida, responda em texto (sem chamar ferramenta) com um resumo claro do que foi feito.
+- Nunca tente acessar nada fora do workspace.`;
+function capResult(s, n) {
+  if (typeof s !== 'string') s = JSON.stringify(s);
+  return s.length > n ? s.slice(0, n) + '\n...[truncado, ' + s.length + ' chars]' : s;
+}
+app.post('/api/coder/run', requireOwner, async (req, res) => {
+  const { task } = req.body || {};
+  if (!task) return res.status(400).json({ error: 'task required' });
+  const ctx = { ws: userWorkspace(req.session.userId), userId: req.session.userId };
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+  const sse = (event, payload) => res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+  const tools = coderToolsPayload();
+  const messages = [
+    { role: 'system', content: CODER_SYSTEM },
+    { role: 'user', content: task },
+  ];
+  sse('meta', { model: CODER_MODEL, maxSteps: CODER_MAX_STEPS, tools: tools.map(t => t.function.name) });
+  try {
+    for (let step = 1; step <= CODER_MAX_STEPS; step++) {
+      const response = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: CODER_MODEL, messages, tools, tool_choice: 'auto', temperature: 0.2, stream: false }),
+      });
+      if (!response.ok) {
+        const errTxt = await response.text();
+        sse('error', { error: 'LM Studio ' + response.status + ': ' + errTxt.slice(0, 200) });
+        res.end();
+        return;
+      }
+      const data = await response.json();
+      const msg = (data.choices && data.choices[0] && data.choices[0].message) || {};
+      const toolCalls = msg.tool_calls || [];
+      if (toolCalls.length === 0) {
+        sse('done', { reply: (msg.content || '').trim(), steps: step - 1 });
+        res.end();
+        return;
+      }
+      messages.push({ role: 'assistant', content: msg.content || '', tool_calls: toolCalls });
+      for (const tc of toolCalls) {
+        const name = tc.function && tc.function.name;
+        let args = {};
+        try { args = JSON.parse((tc.function && tc.function.arguments) || '{}'); } catch (e) { args = {}; }
+        sse('step', { n: step, tool: name, args });
+        const r = runCoderTool(name, args, ctx);
+        sse('tool_result', { n: step, tool: name, ok: r.ok, result: capResult(r.result, 2000) });
+        messages.push({ role: 'tool', tool_call_id: tc.id, content: capResult(r.result, 8000) });
+      }
+    }
+    sse('error', { error: 'max_steps (' + CODER_MAX_STEPS + ') atingido sem conclusao' });
+    res.end();
+  } catch (err) {
+    console.error('[CODER-RUN] Erro:', err.message);
+    sse('error', { error: err.message });
+    res.end();
+  }
+});
 function isStrongPassword(pw) {
   return typeof pw === 'string' && pw.length >= 8 && /[A-Z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw);
 }
