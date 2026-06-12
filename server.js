@@ -1,8 +1,8 @@
 import express from 'express';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname, join, resolve, relative, isAbsolute } from 'path';
 import { readdir, readFile, writeFile, unlink } from 'fs/promises';
-import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync, statSync } from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import dotenv from 'dotenv';
@@ -140,6 +140,128 @@ function loadUsersCached() {
   return _usersCache;
 }
 function saveUsers(list) { writeFileSync(USERS_PATH, JSON.stringify(list, null, 2), 'utf-8'); _usersCache = null; }
+
+// ===== Frente 1.1: Tool Registry + Sandbox (coder agent) =====
+const WORKSPACE_ROOT = join(__dirname, 'data', 'workspaces');
+function userWorkspace(userId) {
+  const ws = join(WORKSPACE_ROOT, userId, 'default');
+  if (!existsSync(ws)) mkdirSync(ws, { recursive: true });
+  return ws;
+}
+function safeResolve(ws, p) {
+  const target = resolve(ws, p || '.');
+  const rel = relative(ws, target);
+  if (rel !== '' && (rel.startsWith('..') || isAbsolute(rel))) {
+    throw new Error('path fora do workspace: ' + p);
+  }
+  return target;
+}
+function grepWorkspace(ws, pattern, sub) {
+  const re = new RegExp(pattern, 'i');
+  const root = safeResolve(ws, sub || '.');
+  const out = [];
+  const MAX = 200;
+  const SKIP = new Set(['.git', 'node_modules']);
+  function walk(dir) {
+    if (out.length >= MAX) return;
+    let entries;
+    try { entries = readdirSync(dir); } catch (e) { return; }
+    for (const name of entries) {
+      if (out.length >= MAX) return;
+      if (SKIP.has(name)) continue;
+      const full = join(dir, name);
+      let st;
+      try { st = statSync(full); } catch (e) { continue; }
+      if (st.isDirectory()) { walk(full); continue; }
+      if (st.size > 512 * 1024) continue;
+      let content;
+      try { content = readFileSync(full, 'utf-8'); } catch (e) { continue; }
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (re.test(lines[i])) {
+          out.push(relative(ws, full) + ':' + (i + 1) + ': ' + lines[i].trim().slice(0, 200));
+          if (out.length >= MAX) break;
+        }
+      }
+    }
+  }
+  walk(root);
+  return out;
+}
+const CODER_TOOLS = [
+  {
+    name: 'read_file',
+    description: 'Le o conteudo de um arquivo do workspace.',
+    parameters: { type: 'object', properties: { path: { type: 'string', description: 'Caminho relativo ao workspace' } }, required: ['path'] },
+    danger: 'safe',
+    handler: (args, ctx) => {
+      const target = safeResolve(ctx.ws, args.path);
+      if (!existsSync(target)) return 'ERRO: arquivo nao existe: ' + args.path;
+      return readFileSync(target, 'utf-8');
+    },
+  },
+  {
+    name: 'list_dir',
+    description: 'Lista arquivos e pastas de um diretorio do workspace.',
+    parameters: { type: 'object', properties: { path: { type: 'string', description: 'Caminho relativo (default: raiz)' } }, required: [] },
+    danger: 'safe',
+    handler: (args, ctx) => {
+      const target = safeResolve(ctx.ws, args.path || '.');
+      if (!existsSync(target)) return 'ERRO: diretorio nao existe: ' + (args.path || '.');
+      const entries = readdirSync(target).map(name => {
+        const st = statSync(join(target, name));
+        return (st.isDirectory() ? 'dir  ' : 'file ') + name + (st.isDirectory() ? '' : ' (' + st.size + 'b)');
+      });
+      return entries.length ? entries.join('\n') : '(vazio)';
+    },
+  },
+  {
+    name: 'grep',
+    description: 'Busca um padrao (regex) nos arquivos do workspace. Retorna arquivo:linha.',
+    parameters: { type: 'object', properties: { pattern: { type: 'string', description: 'Regex a buscar' }, path: { type: 'string', description: 'Subpasta opcional' } }, required: ['pattern'] },
+    danger: 'safe',
+    handler: (args, ctx) => {
+      const hits = grepWorkspace(ctx.ws, args.pattern, args.path);
+      return hits.length ? hits.join('\n') : '(nenhum match)';
+    },
+  },
+  {
+    name: 'write_file',
+    description: 'Escreve/sobrescreve um arquivo no workspace (sandbox). Cria pastas se preciso.',
+    parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] },
+    danger: 'safe',
+    handler: (args, ctx) => {
+      const target = safeResolve(ctx.ws, args.path);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, args.content == null ? '' : args.content, 'utf-8');
+      return 'OK: escrito ' + args.path + ' (' + (args.content ? args.content.length : 0) + ' bytes)';
+    },
+  },
+];
+const CODER_TOOL_MAP = new Map(CODER_TOOLS.map(t => [t.name, t]));
+function coderToolsPayload() {
+  return CODER_TOOLS.filter(t => t.danger === 'safe').map(t => ({
+    type: 'function',
+    function: { name: t.name, description: t.description, parameters: t.parameters },
+  }));
+}
+function runCoderTool(name, args, ctx) {
+  const tool = CODER_TOOL_MAP.get(name);
+  if (!tool) return { ok: false, result: 'ERRO: tool desconhecida: ' + name };
+  if (tool.danger !== 'safe') return { ok: false, result: 'ERRO: tool perigosa requer aprovacao (Frente 3): ' + name };
+  try {
+    return { ok: true, result: tool.handler(args || {}, ctx) };
+  } catch (err) {
+    return { ok: false, result: 'ERRO: ' + err.message };
+  }
+}
+app.post('/api/coder/tool', requireOwner, (req, res) => {
+  const { tool, args } = req.body || {};
+  if (!tool) return res.status(400).json({ error: 'tool required' });
+  const ws = userWorkspace(req.session.userId);
+  const r = runCoderTool(tool, args, { ws, userId: req.session.userId });
+  res.json({ tool, ok: r.ok, result: r.result });
+});
 function isStrongPassword(pw) {
   return typeof pw === 'string' && pw.length >= 8 && /[A-Z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw);
 }
