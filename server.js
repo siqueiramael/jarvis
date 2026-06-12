@@ -253,6 +253,28 @@ function tokenBudget(ctx) {
   return Math.max(CHAT_TOK_FLOOR, Math.min(CHAT_TOK_CEIL, Math.floor(c * 0.5)));
 }
 let currentModelTokens = tokenBudget(8192);
+
+// quick-win: persistir modelo escolhido entre restarts (data/state.json)
+const STATE_PATH = join(__dirname, 'data', 'state.json');
+function saveState() {
+  try {
+    writeFileSync(STATE_PATH, JSON.stringify({ currentModel, currentModelTokens }, null, 2));
+  } catch (err) {
+    console.error('[STATE] falha ao salvar: ' + err.message);
+  }
+}
+function loadState() {
+  try {
+    if (!existsSync(STATE_PATH)) return;
+    const st = JSON.parse(readFileSync(STATE_PATH, 'utf8'));
+    if (st.currentModel) currentModel = st.currentModel;
+    if (Number.isInteger(st.currentModelTokens)) currentModelTokens = st.currentModelTokens;
+    console.log('[STATE] modelo restaurado: ' + currentModel + ' (max_tokens=' + currentModelTokens + ')');
+  } catch (err) {
+    console.error('[STATE] falha ao carregar: ' + err.message);
+  }
+}
+loadState();
 const SESSION_TIMEOUT_MS = 10 * 60 * 1000; // 10 min idle → auto-save
 const SESSION_MAX_HISTORY = 20; // últimas 20 mensagens no contexto
 
@@ -1144,6 +1166,7 @@ app.post('/api/model', async (req, res) => {
     currentModel = model;
     currentModelTokens = tokenBudget(found.loaded_context_length || 8192);
     console.log('[MODEL] trocado para: ' + currentModel + ' (max_tokens=' + currentModelTokens + ')');
+    saveState();
     res.json({ model: currentModel, state: found.state });
   } catch (err) {
     res.status(502).json({ error: 'LM Studio inacessivel: ' + err.message });
