@@ -58,6 +58,10 @@
       <h2>Usuários</h2>
       <table><thead><tr><th>Usuário</th><th>Papel</th><th>Estado</th><th>Privilégios</th><th></th></tr></thead><tbody id="users-body"></tbody></table>
     </div>
+    <div class="card">
+      <h2>Capacidades</h2>
+      <div id="caps-body"></div>
+    </div>
   </div>
 <script>
   const $ = id => document.getElementById(id);
@@ -131,7 +135,36 @@
   };
   $('copy').onclick = ()=>{ navigator.clipboard.writeText($('urltext').textContent).catch(()=>{}); $('copy').textContent='Copiado!'; setTimeout(()=>$('copy').textContent='Copiar',1500); };
   $('logout').onclick = async ()=>{ try{await fetch('/api/logout',{method:'POST'});}catch(e){} location.href='/login'; };
-  (async()=>{ try{ const r=await fetch('/api/me'); ME = r.ok? await r.json():null; }catch(e){} try{ const rp=await fetch('/api/permissions'); if(rp.ok){ const dp=await rp.json(); PERMS=dp.permissions||[]; } }catch(e){} loadInvites(); loadUsers(); })();
+  async function loadCaps(){
+    try {
+      const r = await fetch('/api/capabilities'); const d = await r.json();
+      const body = $('caps-body'); body.innerHTML='';
+      const caps = d.capabilities||[];
+      if(!caps.length){ body.innerHTML='<div class="empty">Nenhuma capacidade.</div>'; return; }
+      for(const c of caps){
+        const row = document.createElement('div');
+        row.style.cssText='display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);';
+        const info = document.createElement('div');
+        info.innerHTML='<div style="font-weight:600;">'+c.label+'</div><div class="mono" style="font-size:12px;opacity:.7;">'+c.description+'</div>';
+        const wrap = document.createElement('label');
+        wrap.style.cssText='display:inline-flex;align-items:center;gap:8px;cursor:pointer;white-space:nowrap;';
+        const cb = document.createElement('input'); cb.type='checkbox'; cb.checked=!!c.enabled;
+        const txt = document.createElement('span'); txt.style.cssText='font-size:12px;opacity:.7;'; txt.textContent=c.enabled?'ativo':'inativo';
+        cb.onchange = async ()=>{
+          cb.disabled=true;
+          try {
+            const rr = await fetch('/api/capabilities/'+c.key+'/toggle',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:cb.checked})});
+            if(rr.ok){ txt.textContent=cb.checked?'ativo':'inativo'; } else { cb.checked=!cb.checked; }
+          } catch(e){ cb.checked=!cb.checked; }
+          cb.disabled=false;
+        };
+        wrap.appendChild(cb); wrap.appendChild(txt);
+        row.appendChild(info); row.appendChild(wrap);
+        body.appendChild(row);
+      }
+    } catch(e){ $('caps-body').textContent='erro ao carregar'; }
+  }
+  (async()=>{ try{ const r=await fetch('/api/me'); ME = r.ok? await r.json():null; }catch(e){} try{ const rp=await fetch('/api/permissions'); if(rp.ok){ const dp=await rp.json(); PERMS=dp.permissions||[]; } }catch(e){} loadInvites(); loadUsers(); loadCaps(); })();
 </script>
 </body>
 </html>

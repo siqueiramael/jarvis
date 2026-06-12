@@ -378,6 +378,47 @@ app.get('/api/coder/file', requireOwner, (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+
+// ===== Frente 2.1: Catalogo de capacidades =====
+const CAPABILITIES = [
+  { key: 'doc_reader', label: 'Leitura de documentos', description: 'Enviar arquivos e a Luma le e responde sobre eles.', default: false, handles: ['.txt', '.md', '.pdf', '.docx', '.xml', '.csv', '.json'] },
+];
+const CAP_MAP = new Map(CAPABILITIES.map(c => [c.key, c]));
+const CAPABILITIES_PATH = join(__dirname, 'data', 'capabilities.json');
+function loadCapabilities() {
+  let saved = {};
+  try { if (existsSync(CAPABILITIES_PATH)) saved = JSON.parse(readFileSync(CAPABILITIES_PATH, 'utf-8')); } catch (e) {}
+  const out = {};
+  for (const c of CAPABILITIES) out[c.key] = (c.key in saved) ? !!saved[c.key] : !!c.default;
+  return out;
+}
+function isCapabilityEnabled(key) {
+  return loadCapabilities()[key] === true;
+}
+function setCapability(key, on) {
+  const state = loadCapabilities();
+  state[key] = !!on;
+  writeFileSync(CAPABILITIES_PATH, JSON.stringify(state, null, 2), 'utf-8');
+  return state;
+}
+function requireCapability(key) {
+  return (req, res, next) => {
+    if (isCapabilityEnabled(key)) return next();
+    res.status(403).json({ error: 'capacidade desabilitada: ' + key });
+  };
+}
+app.get('/api/capabilities', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'nao autenticado' });
+  const enabled = loadCapabilities();
+  res.json({ capabilities: CAPABILITIES.map(c => ({ key: c.key, label: c.label, description: c.description, handles: c.handles || [], enabled: enabled[c.key] === true })) });
+});
+app.post('/api/capabilities/:key/toggle', requireOwner, (req, res) => {
+  const key = req.params.key;
+  if (!CAP_MAP.has(key)) return res.status(404).json({ error: 'capacidade desconhecida' });
+  const desired = (req.body && typeof req.body.enabled === 'boolean') ? req.body.enabled : !isCapabilityEnabled(key);
+  const state = setCapability(key, desired);
+  res.json({ ok: true, key: key, enabled: state[key] === true });
+});
 function isStrongPassword(pw) {
   return typeof pw === 'string' && pw.length >= 8 && /[A-Z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw);
 }
