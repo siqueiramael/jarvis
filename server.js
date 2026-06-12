@@ -140,6 +140,24 @@ function inviteState(inv) {
   return 'valid';
 }
 
+// --- privilegios por usuario ---
+const GRANTABLE_PERMISSIONS = [
+  { key: 'model:switch', label: 'Trocar o modelo de IA (global)' },
+];
+const GRANTABLE_KEYS = new Set(GRANTABLE_PERMISSIONS.map(p => p.key));
+function userHasPermission(user, perm) {
+  if (!user) return false;
+  if (user.role === 'owner') return true;
+  return Array.isArray(user.permissions) && user.permissions.includes(perm);
+}
+function requirePermission(perm) {
+  return (req, res, next) => {
+    const u = loadUsers().find(x => x.id === req.session?.userId);
+    if (userHasPermission(u, perm)) return next();
+    res.status(403).json({ error: 'permissao negada' });
+  };
+}
+
 app.post('/api/invites', requireOwner, (req, res) => {
   try {
     const raw = parseInt((req.body && req.body.ttlHours) || INVITE_TTL_HOURS, 10);
@@ -178,6 +196,7 @@ app.get('/api/users', requireOwner, (req, res) => {
   const list = loadUsers().map(u => ({
     id: u.id, username: u.username, role: u.role, active: u.active !== false,
     displayName: (u.profile && u.profile.displayName) || u.username, createdAt: u.createdAt,
+    permissions: u.permissions || [],
   }));
   res.json({ users: list });
 });
@@ -192,6 +211,24 @@ app.post('/api/users/:id/toggle-active', requireOwner, (req, res) => {
   u.active = u.active === false ? true : false;
   saveUsers(users);
   res.json({ ok: true, id: u.id, active: u.active });
+});
+
+app.get('/api/permissions', requireOwner, (req, res) => {
+  res.json({ permissions: GRANTABLE_PERMISSIONS });
+});
+
+app.post('/api/users/:id/permissions', requireOwner, (req, res) => {
+  const { permissions } = req.body;
+  if (!Array.isArray(permissions)) return res.status(400).json({ error: 'permissions deve ser array' });
+  const invalid = permissions.filter(p => !GRANTABLE_KEYS.has(p));
+  if (invalid.length) return res.status(400).json({ error: 'permissao invalida: ' + invalid.join(', ') });
+  const users = loadUsers();
+  const u = users.find(x => x.id === req.params.id);
+  if (!u) return res.status(404).json({ error: 'usuario nao encontrado' });
+  if (u.role === 'owner') return res.status(400).json({ error: 'owner ja tem tudo' });
+  u.permissions = [...new Set(permissions)];
+  saveUsers(users);
+  res.json({ ok: true, id: u.id, permissions: u.permissions });
 });
 
 app.get('/api/invite-check/:token', (req, res) => {
@@ -1156,7 +1193,7 @@ app.get('/api/models', async (req, res) => {
 app.get('/api/model', (req, res) => {
   res.json({ model: currentModel });
 });
-app.post('/api/model', async (req, res) => {
+app.post('/api/model', requirePermission('model:switch'), async (req, res) => {
   const { model } = req.body;
   if (!model) return res.status(400).json({ error: 'model required' });
   try {

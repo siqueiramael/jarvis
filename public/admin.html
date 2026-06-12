@@ -56,12 +56,13 @@
     </div>
     <div class="card">
       <h2>Usuários</h2>
-      <table><thead><tr><th>Usuário</th><th>Papel</th><th>Estado</th><th></th></tr></thead><tbody id="users-body"></tbody></table>
+      <table><thead><tr><th>Usuário</th><th>Papel</th><th>Estado</th><th>Privilégios</th><th></th></tr></thead><tbody id="users-body"></tbody></table>
     </div>
   </div>
 <script>
   const $ = id => document.getElementById(id);
   let ME = null;
+  let PERMS = [];
   function fmt(d){ if(!d) return '—'; try { return new Date(d).toLocaleString('pt-BR'); } catch(e){ return d; } }
   async function loadInvites(){
     const r = await fetch('/api/invites'); const d = await r.json();
@@ -88,7 +89,31 @@
       const tr=document.createElement('tr');
       const roleBadge = u.role==='owner' ? '<span class="badge b-owner">owner</span>' : 'user';
       const stBadge = u.active ? '<span class="badge b-active">ativo</span>' : '<span class="badge b-inactive">inativo</span>';
-      tr.innerHTML = '<td>'+u.displayName+' <span class="mono">@'+u.username+'</span></td><td>'+roleBadge+'</td><td>'+stBadge+'</td><td></td>';
+      tr.innerHTML = '<td>'+u.displayName+' <span class="mono">@'+u.username+'</span></td><td>'+roleBadge+'</td><td>'+stBadge+'</td><td class="perms"></td><td></td>';
+      const permTd = tr.querySelector('.perms');
+      if(u.role==='owner'){
+        permTd.innerHTML = '<span class="mono" style="opacity:.55">tudo</span>';
+      } else {
+        const granted = new Set(u.permissions||[]);
+        for(const p of PERMS){
+          const lbl = document.createElement('label');
+          lbl.style.cssText = 'display:inline-flex;align-items:center;gap:5px;margin-right:12px;font-size:13px;cursor:pointer;';
+          const cb = document.createElement('input'); cb.type='checkbox'; cb.checked = granted.has(p.key);
+          cb.onchange = async ()=>{
+            cb.disabled = true;
+            const cur = new Set(u.permissions||[]);
+            if(cb.checked) cur.add(p.key); else cur.delete(p.key);
+            const next = [...cur];
+            try {
+              const rr = await fetch('/api/users/'+u.id+'/permissions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({permissions:next})});
+              if(rr.ok){ u.permissions = next; } else { cb.checked = !cb.checked; }
+            } catch(e){ cb.checked = !cb.checked; }
+            cb.disabled = false;
+          };
+          lbl.appendChild(cb); lbl.appendChild(document.createTextNode(p.label));
+          permTd.appendChild(lbl);
+        }
+      }
       const td=tr.lastChild; const self = ME && ME.id===u.id;
       if(u.role!=='owner' && !self){
         const b=document.createElement('button'); b.className='ghost'; b.textContent=u.active?'Desativar':'Ativar';
@@ -106,7 +131,7 @@
   };
   $('copy').onclick = ()=>{ navigator.clipboard.writeText($('urltext').textContent).catch(()=>{}); $('copy').textContent='Copiado!'; setTimeout(()=>$('copy').textContent='Copiar',1500); };
   $('logout').onclick = async ()=>{ try{await fetch('/api/logout',{method:'POST'});}catch(e){} location.href='/login'; };
-  (async()=>{ try{ const r=await fetch('/api/me'); ME = r.ok? await r.json():null; }catch(e){} loadInvites(); loadUsers(); })();
+  (async()=>{ try{ const r=await fetch('/api/me'); ME = r.ok? await r.json():null; }catch(e){} try{ const rp=await fetch('/api/permissions'); if(rp.ok){ const dp=await rp.json(); PERMS=dp.permissions||[]; } }catch(e){} loadInvites(); loadUsers(); })();
 </script>
 </body>
 </html>
