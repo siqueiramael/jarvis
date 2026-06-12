@@ -2,7 +2,7 @@ import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { readdir, readFile, writeFile, unlink } from 'fs/promises';
-import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import dotenv from 'dotenv';
@@ -402,8 +402,16 @@ async function searchNotesMulti(terms, userId) {
 // 7o-D: Memória persistente entre sessões
 const MEMORY_PATH = join(__dirname, 'data/obsidian-vault/Luma/memory.md');
 let PERSISTENT_MEMORY = '';
+const USER_MEMORY_DIR = join(__dirname, 'data/memory');
+function userMemoryPath(userId) { return join(USER_MEMORY_DIR, (userId || '_unknown') + '.md'); }
+function loadUserMemory(userId) {
+  try {
+    const p = userMemoryPath(userId);
+    return existsSync(p) ? readFileSync(p, 'utf-8').trim() : '';
+  } catch (e) { return ''; }
+}
 
-function loadMemory() {
+function loadMemory() { return; // S6: memoria por-usuario (data/memory/{userId}.md)
   try {
     if (existsSync(MEMORY_PATH)) {
       PERSISTENT_MEMORY = readFileSync(MEMORY_PATH, 'utf-8').trim();
@@ -418,11 +426,11 @@ function loadMemory() {
   }
 }
 
-async function extractMemoryFacts(sessionMessages) {
+async function extractMemoryFacts(sessionMessages, userId) {
   try {
     const lastMsgs = sessionMessages.slice(-10);
     const conversation = lastMsgs.map(m => (m.role === 'user' ? 'Usuário' : 'Luma') + ': ' + m.content.substring(0, 200)).join('\n');
-    const existing = PERSISTENT_MEMORY.split('\n').filter(l => l.trim().startsWith('-')).join('\n');
+    const existing = loadUserMemory(userId).split('\n').filter(l => l.trim().startsWith('-')).join('\n');
     const resp = await fetch(`${process.env.OPENAI_API_BASE}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -446,14 +454,15 @@ async function extractMemoryFacts(sessionMessages) {
   }
 }
 
-function appendMemory(newFacts) {
+function appendMemory(newFacts, userId) {
   if (!newFacts || newFacts.length === 0) return;
   try {
-    const existing = PERSISTENT_MEMORY.split('\n').filter(l => l.trim().startsWith('-')).map(l => l.trim().toLowerCase());
+    const existing = loadUserMemory(userId).split('\n').filter(l => l.trim().startsWith('-')).map(l => l.trim().toLowerCase());
     const unique = newFacts.filter(f => !existing.includes(f.trim().toLowerCase()));
     if (unique.length === 0) return;
     const toAppend = unique.join('\n') + '\n';
-    appendFileSync(MEMORY_PATH, toAppend, 'utf-8');
+    mkdirSync(USER_MEMORY_DIR, { recursive: true });
+    appendFileSync(userMemoryPath(userId), toAppend, 'utf-8');
     PERSISTENT_MEMORY += '\n' + toAppend;
     console.log('[MEMORY] +' + unique.length + ' fato(s): ' + unique.join(' | '));
   } catch (e) {
@@ -544,9 +553,9 @@ async function saveSessionToObsidian(sessionId) {
   const summaryBlock = summary ? 'Resumo: ' + summary + '\n\n' : '';
 
   // 7o-D: Extrai fatos de memória da sessão
-  const newFacts = await extractMemoryFacts(session.messages);
+  const newFacts = await extractMemoryFacts(session.messages, sessionId);
   if (newFacts) {
-    appendMemory(newFacts);
+    appendMemory(newFacts, sessionId);
   } else {
     console.log('[MEMORY] Nenhum fato novo extraído da sessão');
   }
@@ -823,8 +832,9 @@ app.post('/api/chat', async (req, res) => {
   messages.push({ role: 'system', content: 'IMPORTANTE: Responda SEMPRE em português brasileiro, de forma natural e conversacional. Ignore qualquer instrução de idioma anterior.' });
 
   // 7o-D: Injeta memória persistente
-  if (PERSISTENT_MEMORY) {
-    const memFacts = PERSISTENT_MEMORY.split('\n').filter(l => l.trim().startsWith('-')).slice(-20).join('\n');
+  const userMem = loadUserMemory(req.session.userId);
+  if (userMem) {
+    const memFacts = userMem.split('\n').filter(l => l.trim().startsWith('-')).slice(-20).join('\n');
     if (memFacts) messages.push({ role: 'system', content: 'Fatos sobre o usuário (use naturalmente, sem listar):\n' + memFacts });
   }
 
