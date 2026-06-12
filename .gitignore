@@ -28,3 +28,4 @@ piper_linux_x86_64.tar.gz
 # Logs
 logs/
 data/
+*.bak*
