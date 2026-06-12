@@ -333,6 +333,51 @@ app.post('/api/coder/run', requireOwner, async (req, res) => {
     res.end();
   }
 });
+
+// ===== Frente 1.5a: endpoints da view Coder (tree + file + rota /coder) =====
+function workspaceTree(ws, rel) {
+  const dir = safeResolve(ws, rel || '.');
+  const out = [];
+  let entries;
+  try { entries = readdirSync(dir); } catch (e) { return out; }
+  entries.sort();
+  const SKIP = new Set(['.git', 'node_modules']);
+  for (const name of entries) {
+    if (SKIP.has(name)) continue;
+    const childRel = (rel && rel !== '.') ? rel + '/' + name : name;
+    let st;
+    try { st = statSync(join(dir, name)); } catch (e) { continue; }
+    if (st.isDirectory()) {
+      out.push({ name: name, path: childRel, type: 'dir', children: workspaceTree(ws, childRel) });
+    } else {
+      out.push({ name: name, path: childRel, type: 'file', size: st.size });
+    }
+  }
+  return out;
+}
+app.get('/coder', (req, res) => {
+  if (!req.session || !req.session.userId) return res.redirect('/login');
+  const u = loadUsers().find(x => x.id === req.session.userId);
+  if (!u || u.role !== 'owner') return res.redirect('/');
+  res.sendFile(join(__dirname, 'public', 'coder.html'));
+});
+app.get('/api/coder/tree', requireOwner, (req, res) => {
+  const ws = userWorkspace(req.session.userId);
+  res.json({ tree: workspaceTree(ws, '.') });
+});
+app.get('/api/coder/file', requireOwner, (req, res) => {
+  const ws = userWorkspace(req.session.userId);
+  try {
+    const target = safeResolve(ws, req.query.path || '');
+    if (!existsSync(target)) return res.status(404).json({ error: 'nao existe' });
+    const st = statSync(target);
+    if (st.isDirectory()) return res.status(400).json({ error: 'e um diretorio' });
+    if (st.size > 1024 * 1024) return res.status(413).json({ error: 'arquivo muito grande (>1MB)' });
+    res.json({ path: req.query.path, content: readFileSync(target, 'utf-8') });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 function isStrongPassword(pw) {
   return typeof pw === 'string' && pw.length >= 8 && /[A-Z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw);
 }
