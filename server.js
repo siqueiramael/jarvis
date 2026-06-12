@@ -11,6 +11,7 @@ import session from 'express-session';
 import FileStoreFactory from 'session-file-store';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
+import rateLimit from 'express-rate-limit';
 
 dotenv.config();
 
@@ -78,7 +79,10 @@ function findUserByUsername(username) {
   return loadUsers().find(u => u.username === username && u.active !== false);
 }
 
-app.post('/api/login', async (req, res) => {
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'muitas tentativas de login, tente novamente em alguns minutos' } });
+const registerLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, message: { error: 'muitas tentativas de registro, tente mais tarde' } });
+
+app.post('/api/login', loginLimiter, async (req, res) => {
   try {
     const { username, password } = req.body || {};
     if (!username || !password) return res.status(400).json({ error: 'username e senha obrigatorios' });
@@ -152,7 +156,7 @@ app.get('/invite/:token', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'register.html'));
 });
 
-app.post('/api/register', async (req, res) => {
+app.post('/api/register', registerLimiter, async (req, res) => {
   try {
     const { token, username, password, displayName, fullName, email, phone } = req.body || {};
     const st = inviteState(findInvite(token));
