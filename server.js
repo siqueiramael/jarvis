@@ -1342,7 +1342,7 @@ async function callAgent(endpoint, payload = null) {
   return resp.json();
 }
 
-app.post('/api/agent/execute', async (req, res) => {
+app.post('/api/agent/execute', requireOwner, async (req, res) => {
   try {
     const { cmd, timeout = 30 } = req.body;
     if (!cmd) return res.status(400).json({ error: 'cmd required' });
@@ -1354,7 +1354,7 @@ app.post('/api/agent/execute', async (req, res) => {
   }
 });
 
-app.get('/api/agent/screenshot', async (req, res) => {
+app.get('/api/agent/screenshot', requireOwner, async (req, res) => {
   try {
     const result = await callAgent('/capture/screenshot');
     res.json(result);
@@ -1364,7 +1364,7 @@ app.get('/api/agent/screenshot', async (req, res) => {
   }
 });
 
-app.post('/api/agent/file/read', async (req, res) => {
+app.post('/api/agent/file/read', requireOwner, async (req, res) => {
   try {
     const { path } = req.body;
     if (!path) return res.status(400).json({ error: 'path required' });
@@ -1374,7 +1374,7 @@ app.post('/api/agent/file/read', async (req, res) => {
   }
 });
 
-app.post('/api/agent/file/list', async (req, res) => {
+app.post('/api/agent/file/list', requireOwner, async (req, res) => {
   try {
     const { path } = req.body;
     if (!path) return res.status(400).json({ error: 'path required' });
@@ -1419,9 +1419,17 @@ async function appendObsidianNote({ path: notePath, content }, userId) {
 // ============================================
 // EXECUTE ACTION — roteador central
 // ============================================
+const OWNER_ONLY_ACTIONS = new Set(['execute_shell', 'open_app', 'git_commit', 'screenshot']);
 async function executeAction(action, userId) {
   if (!action || !action.type) return { error: 'Action sem type definido' };
   const { type, params } = action;
+  if (OWNER_ONLY_ACTIONS.has(type)) {
+    const _u = loadUsers().find(x => x.id === userId);
+    if (!_u || _u.role !== 'owner') {
+      console.warn('[ACTION] bloqueada (nao-owner): ' + type + ' user=' + userId);
+      return { error: 'Acao de sistema restrita ao owner' };
+    }
+  }
   console.log(`[ACTION] Executando: ${type}`, params);
   try {
     switch (type) {
