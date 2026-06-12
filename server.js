@@ -433,6 +433,17 @@ const DOC_EXTRACTORS = {
   '.pdf': async (buf) => (await pdfParse(buf)).text,
   '.docx': async (buf) => (await mammoth.extractRawText({ buffer: buf })).value,
 };
+app.get('/api/docs/attached', (req, res) => {
+  const list = attachedDocsByUser.get(req.session.userId) || [];
+  res.json({ docs: list.map(d => ({ name: d.name, chars: d.chars, at: d.at })) });
+});
+app.post('/api/docs/detach', (req, res) => {
+  const { name, all } = req.body || {};
+  if (all) { attachedDocsByUser.set(req.session.userId, []); return res.json({ ok: true, docs: [] }); }
+  const list = (attachedDocsByUser.get(req.session.userId) || []).filter(d => d.name !== name);
+  attachedDocsByUser.set(req.session.userId, list);
+  res.json({ ok: true, docs: list.map(d => ({ name: d.name, chars: d.chars, at: d.at })) });
+});
 app.post('/api/docs/upload', requireCapability('doc_reader'), docUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'arquivo (campo file) obrigatorio' });
@@ -449,7 +460,11 @@ app.post('/api/docs/upload', requireCapability('doc_reader'), docUpload.single('
     const notePath = join(docsDir, base + '.md');
     const header = '# ' + orig + '\n\n> Documento enviado em ' + new Date().toISOString() + '\n\n';
     writeFileSync(notePath, header + text, 'utf-8');
-    res.json({ ok: true, name: orig, chars: text.length, saved: 'Documentos/' + base + '.md' });
+    const _list = attachedDocsByUser.get(req.session.userId) || [];
+    const _filtered = _list.filter(d => d.name !== orig);
+    _filtered.push({ name: orig, text, chars: text.length, at: Date.now() });
+    attachedDocsByUser.set(req.session.userId, _filtered);
+    res.json({ ok: true, name: orig, chars: text.length, saved: 'Documentos/' + base + '.md', attached: _filtered.map(d => ({ name: d.name, chars: d.chars, at: d.at })) });
   } catch (err) {
     console.error('[DOCS] Erro:', err.message);
     res.status(500).json({ error: err.message });
@@ -614,6 +629,7 @@ let agentsList = [];
 // SESSION STORE — histórico de conversa
 // ============================================
 const sessionStore = new Map();
+const attachedDocsByUser = new Map(); // userId -> [{name,text,chars,at}] fixados na conversa
 let currentModel = process.env.LM_STUDIO_MODEL;
 const CHAT_TOK_CEIL = parseInt(process.env.CHAT_MAX_TOKENS_CEIL || '8192', 10);
 const CHAT_TOK_FLOOR = 512;
@@ -1335,6 +1351,19 @@ app.post('/api/chat', async (req, res) => {
       .slice(-SESSION_MAX_HISTORY)
       .filter(m => m.content && m.content.trim().length > 0);
     messages.push(...history);
+  }
+  // Documentos anexados na conversa (fixados pelo usuario) - fonte primaria
+  const _attached = attachedDocsByUser.get(req.session.userId) || [];
+  if (_attached.length > 0) {
+    let _budget = 6000;
+    const _parts = [];
+    for (let i = _attached.length - 1; i >= 0 && _budget > 0; i--) {
+      const d = _attached[i];
+      const chunk = String(d.text || '').slice(0, _budget);
+      _budget -= chunk.length;
+      _parts.push('### ' + d.name + '\n' + chunk);
+    }
+    messages.push({ role: 'system', content: 'Documentos que o usuario anexou NESTA conversa (fonte primaria - ele subiu estes arquivos para falar sobre eles). Leia, use e cite o conteudo abaixo quando perguntado; voce esta lendo documentos do proprio usuario de volta para ele, nao aconselhando. Para temas profissionais (saude, juridico, financeiro), relate o que o documento diz e acrescente uma nota breve para seguir o profissional responsavel; NAO se recuse a ler o que ja esta escrito.\n\n' + _parts.join('\n\n') });
   }
   // RAG manual (frontend pediu) ou auto-RAG (trigger detectado)
   let ragUsedAuto = false;
