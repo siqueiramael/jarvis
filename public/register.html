@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#0F0A1E">
+<title>Luma · Criar conta</title>
+<style>
+  :root{--bg:#0F0A1E;--panel:#1A1230;--panel2:#241a40;--violet:#8B5CF6;--violet-soft:#a78bfa;--text:#E8E3F5;--muted:#9b91b8;--danger:#f87171;--border:#2e2350}
+  *{box-sizing:border-box}html,body{height:100%}
+  body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#1b1138 0%,var(--bg) 60%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;display:flex;align-items:center;justify-content:center;padding:24px}
+  .card{width:100%;max-width:400px;background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--border);border-radius:18px;padding:30px 28px;box-shadow:0 20px 60px rgba(0,0,0,.45)}
+  .brand{text-align:center;margin-bottom:6px}
+  .logo{font-weight:700;letter-spacing:.5em;font-size:22px;background:linear-gradient(90deg,var(--violet-soft),var(--violet));-webkit-background-clip:text;background-clip:text;color:transparent;padding-left:.5em}
+  .sub{text-align:center;color:var(--muted);font-size:13px;margin:8px 0 22px}
+  label{display:block;font-size:12px;color:var(--muted);margin:0 0 6px 2px}
+  .field{margin-bottom:14px}
+  input{width:100%;padding:11px 13px;border-radius:11px;border:1px solid var(--border);background:#150e2a;color:var(--text);font-size:15px;outline:none;transition:border-color .15s,box-shadow .15s}
+  input:focus{border-color:var(--violet);box-shadow:0 0 0 3px rgba(139,92,246,.25)}
+  .hint{font-size:11px;color:var(--muted);margin:5px 0 0 2px}
+  details{margin:4px 0 14px;border-top:1px solid var(--border);padding-top:12px}
+  summary{cursor:pointer;color:var(--violet-soft);font-size:13px;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary:before{content:'+ ';font-weight:700}
+  details[open] summary:before{content:'\2013 '}
+  button{width:100%;margin-top:4px;padding:12px 14px;border:0;border-radius:12px;cursor:pointer;font-size:15px;font-weight:600;color:#fff;background:linear-gradient(90deg,var(--violet),#6d3df0);transition:filter .15s,transform .05s}
+  button:hover{filter:brightness(1.08)}button:active{transform:translateY(1px)}button:disabled{opacity:.6;cursor:default}
+  .msg{min-height:18px;margin-top:13px;font-size:13px;text-align:center;color:var(--danger)}
+  .errbox{text-align:center;padding:10px 0}
+  .errbox #errText{color:var(--danger);font-size:14px;margin-bottom:16px}
+  .backlink{color:var(--violet-soft);text-decoration:none;font-size:13px}
+  .backlink:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="brand"><span class="logo">LUMA</span></div>
+    <div class="sub">Criar sua conta</div>
+    <div id="formWrap">
+      <div class="field"><label>Usuário *</label><input id="username" autocomplete="username" autofocus></div>
+      <div class="field"><label>Como quer ser chamado *</label><input id="displayName"></div>
+      <div class="field"><label>Senha *</label><input id="password" type="password" autocomplete="new-password"><div class="hint">mín. 8, com 1 maiúscula, 1 número e 1 especial</div></div>
+      <div class="field"><label>Confirmar senha *</label><input id="confirm" type="password" autocomplete="new-password"></div>
+      <details>
+        <summary>Dados opcionais</summary>
+        <div class="field" style="margin-top:12px"><label>Nome completo</label><input id="fullName"></div>
+        <div class="field"><label>E-mail</label><input id="email" type="email"></div>
+        <div class="field"><label>Telefone</label><input id="phone" type="tel"></div>
+      </details>
+      <button id="btn">Criar conta</button>
+      <div class="msg" id="msg"></div>
+    </div>
+    <div id="errWrap" class="errbox" style="display:none">
+      <div id="errText"></div>
+      <a class="backlink" href="/login">Voltar ao login</a>
+    </div>
+  </div>
+<script>
+  const token = location.pathname.split('/').filter(Boolean).pop();
+  const $ = id => document.getElementById(id);
+  function strong(pw){ return pw.length>=8 && /[A-Z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw); }
+  async function check(){
+    try{
+      const r = await fetch('/api/invite-check/' + encodeURIComponent(token));
+      const d = await r.json();
+      if(!d.valid){
+        $('formWrap').style.display='none'; $('errWrap').style.display='block';
+        const m={expired:'Este convite expirou.',used:'Este convite ja foi usado.',invalid:'Convite invalido.'};
+        $('errText').textContent = m[d.state] || 'Convite invalido.';
+      }
+    }catch(e){
+      $('formWrap').style.display='none'; $('errWrap').style.display='block';
+      $('errText').textContent='Nao foi possivel validar o convite.';
+    }
+  }
+  async function submit(){
+    const msg=$('msg'); msg.textContent='';
+    const username=$('username').value.trim(), displayName=$('displayName').value.trim();
+    const password=$('password').value, confirm=$('confirm').value;
+    if(!username||!displayName||!password){ msg.textContent='Preencha os campos obrigatorios.'; return; }
+    if(password!==confirm){ msg.textContent='As senhas nao conferem.'; return; }
+    if(!strong(password)){ msg.textContent='Senha fraca: min 8, 1 maiuscula, 1 numero e 1 especial.'; return; }
+    const btn=$('btn'); btn.disabled=true; btn.textContent='Criando...';
+    try{
+      const r=await fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({token,username,displayName,password,
+          fullName:$('fullName').value.trim(),email:$('email').value.trim(),phone:$('phone').value.trim()})});
+      if(r.ok){ window.location.href='/'; return; }
+      const d=await r.json().catch(()=>({})); msg.textContent=d.error||'Falha no cadastro';
+    }catch(e){ msg.textContent='Erro de conexao'; }
+    btn.disabled=false; btn.textContent='Criar conta';
+  }
+  $('btn').addEventListener('click', submit);
+  check();
+</script>
+</body>
+</html>

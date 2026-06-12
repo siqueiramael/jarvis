@@ -10,6 +10,7 @@ import multer from 'multer';
 import session from 'express-session';
 import FileStoreFactory from 'session-file-store';
 import bcrypt from 'bcryptjs';
+import { randomBytes } from 'crypto';
 
 dotenv.config();
 
@@ -50,10 +51,14 @@ app.get('/login', (req, res) => {
   res.sendFile(join(__dirname, 'public', 'login.html'));
 });
 
-const PUBLIC_PATHS = new Set(['/login', '/api/login', '/api/logout', '/api/me']);
+const PUBLIC_PATHS = new Set(['/login', '/api/login', '/api/logout', '/api/me', '/api/register']);
+const PUBLIC_PREFIXES = ['/invite/', '/api/invite-check/'];
+function isPublic(p) {
+  return PUBLIC_PATHS.has(p) || PUBLIC_PREFIXES.some(pre => p.startsWith(pre));
+}
 
 app.use((req, res, next) => {
-  if (PUBLIC_PATHS.has(req.path) || (req.session && req.session.userId)) return next();
+  if (isPublic(req.path) || (req.session && req.session.userId)) return next();
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'nao autenticado' });
   return res.redirect('/login');
 });
@@ -92,6 +97,86 @@ app.post('/api/login', async (req, res) => {
 
 app.post('/api/logout', (req, res) => {
   req.session.destroy(() => res.json({ ok: true }));
+});
+
+// ============================================
+// CONVITES + REGISTRO
+// ============================================
+const INVITES_PATH = join(__dirname, 'data/invites.json');
+const INVITE_TTL_HOURS = parseInt(process.env.INVITE_TTL_HOURS || '48', 10);
+const USERNAME_RE = /^[a-zA-Z0-9._-]{3,32}$/;
+
+function loadInvites() {
+  try {
+    if (!existsSync(INVITES_PATH)) return [];
+    return JSON.parse(readFileSync(INVITES_PATH, 'utf-8'));
+  } catch (e) { console.error('[INVITE] erro lendo invites.json:', e.message); return []; }
+}
+function saveInvites(list) { writeFileSync(INVITES_PATH, JSON.stringify(list, null, 2), 'utf-8'); }
+function saveUsers(list) { writeFileSync(USERS_PATH, JSON.stringify(list, null, 2), 'utf-8'); }
+function isStrongPassword(pw) {
+  return typeof pw === 'string' && pw.length >= 8 && /[A-Z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw);
+}
+function requireOwner(req, res, next) {
+  if (req.session && req.session.role === 'owner') return next();
+  return res.status(403).json({ error: 'apenas o owner' });
+}
+function findInvite(token) { return loadInvites().find(i => i.token === token); }
+function inviteState(inv) {
+  if (!inv) return 'invalid';
+  if (inv.usedBy) return 'used';
+  if (Date.now() > new Date(inv.expiresAt).getTime()) return 'expired';
+  return 'valid';
+}
+
+app.post('/api/invites', requireOwner, (req, res) => {
+  try {
+    const raw = parseInt((req.body && req.body.ttlHours) || INVITE_TTL_HOURS, 10);
+    const ttl = Math.max(1, Math.min(720, isNaN(raw) ? INVITE_TTL_HOURS : raw));
+    const token = randomBytes(24).toString('base64url');
+    const now = new Date();
+    const invite = { token, createdBy: req.session.userId, createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + ttl * 3600 * 1000).toISOString(), usedBy: null };
+    const list = loadInvites(); list.push(invite); saveInvites(list);
+    const base = process.env.PUBLIC_BASE_URL || (req.protocol + '://' + req.get('host'));
+    res.json({ ok: true, url: base + '/invite/' + token, token, expiresAt: invite.expiresAt, ttlHours: ttl });
+  } catch (e) { console.error('[INVITE] mint erro:', e.message); res.status(500).json({ error: 'erro interno' }); }
+});
+
+app.get('/api/invite-check/:token', (req, res) => {
+  const st = inviteState(findInvite(req.params.token));
+  res.json({ valid: st === 'valid', state: st });
+});
+
+app.get('/invite/:token', (req, res) => {
+  res.sendFile(join(__dirname, 'public', 'register.html'));
+});
+
+app.post('/api/register', async (req, res) => {
+  try {
+    const { token, username, password, displayName, fullName, email, phone } = req.body || {};
+    const st = inviteState(findInvite(token));
+    if (st !== 'valid') return res.status(400).json({ error: 'convite ' + (st === 'used' ? 'ja usado' : st === 'expired' ? 'expirado' : 'invalido') });
+    const uname = (username || '').trim();
+    const dname = (displayName || '').trim();
+    if (!USERNAME_RE.test(uname)) return res.status(400).json({ error: 'username invalido (3-32, letras/numeros/._-)' });
+    if (!dname) return res.status(400).json({ error: 'informe como quer ser chamado' });
+    if (!isStrongPassword(password)) return res.status(400).json({ error: 'senha fraca: min 8, 1 maiuscula, 1 numero, 1 especial' });
+    const users = loadUsers();
+    if (users.some(u => u.username === uname)) return res.status(409).json({ error: 'username ja existe' });
+    const id = 'usr_' + randomBytes(6).toString('base64url');
+    const passwordHash = await bcrypt.hash(password, 12);
+    users.push({ id, username: uname, passwordHash, role: 'user', active: true,
+      createdAt: new Date().toISOString(),
+      profile: { fullName: (fullName || '').trim(), displayName: dname, phone: (phone || '').trim(), email: (email || '').trim() },
+      integrations: {} });
+    saveUsers(users);
+    const invites = loadInvites();
+    const t = invites.find(i => i.token === token);
+    if (t) { t.usedBy = id; t.usedAt = new Date().toISOString(); saveInvites(invites); }
+    req.session.userId = id; req.session.role = 'user';
+    res.json({ ok: true });
+  } catch (e) { console.error('[REGISTER] erro:', e.message); res.status(500).json({ error: 'erro interno' }); }
 });
 
 app.get('/api/me', (req, res) => {
