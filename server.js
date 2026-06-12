@@ -553,7 +553,7 @@ async function saveSessionToObsidian(sessionId) {
 
   const content = summaryBlock + meta + 'Agente: ' + (session.agentId || 'luma') + '\n\n' + lines;
   try {
-    await createObsidianNote({ title, content, folder });
+    await createObsidianNote({ title, content, folder }, sessionId);
     console.log('[SESSION] Sessao ' + sessionId + ' salva no Obsidian (' + turns + ' turnos)');
   } catch (err) {
     console.error('[SESSION] Erro ao salvar:', err.message);
@@ -572,6 +572,8 @@ setInterval(async () => {
   }
 }, 60 * 1000);
 const VAULT_PATH = join(__dirname, 'data/obsidian-vault');
+const USER_VAULTS_DIR = join(__dirname, 'data/vaults');
+function userVaultPath(userId) { return join(USER_VAULTS_DIR, userId || '_unknown'); }
 const WHISPER_PATH = join(__dirname, 'whisper.cpp/build/bin/whisper-cli');
 const WHISPER_MODEL = join(__dirname, 'whisper.cpp/models/ggml-medium.bin');
 const PIPER_PATH = join(__dirname, 'piper-tts/piper');
@@ -1014,7 +1016,7 @@ app.post('/api/chat', async (req, res) => {
     // Executa action se existir
     if (action) {
       actionResult = await Promise.race([
-        executeAction(action),
+        executeAction(action, req.session.userId),
         new Promise(r => setTimeout(() => r({ error: 'timeout: acao demorou mais de 15s' }), 15000))
       ]);
       if (actionResult?.success && actionResult.path) replyText += '\n\n📝 *Salvo em:* `' + actionResult.path + '`';
@@ -1263,7 +1265,7 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     } catch { /* resposta normal em texto */ }
 
     if (voiceAction) {
-      voiceActionResult = await executeAction(voiceAction);
+      voiceActionResult = await executeAction(voiceAction, req.session.userId);
       console.log(`[PIPELINE] ⚙️ Action executada: ${voiceAction.type}`, voiceActionResult);
     }
 
@@ -1370,25 +1372,27 @@ app.post('/api/agent/file/list', async (req, res) => {
 // ============================================
 // OBSIDIAN: CREATE + APPEND
 // ============================================
-async function createObsidianNote({ title, content, folder = '' }) {
+async function createObsidianNote({ title, content, folder = '' }, userId) {
+  const base = userId ? userVaultPath(userId) : VAULT_PATH;
   const pathMod = await import('path');
   const sanitizedTitle = title.replace(/[\\/:*?"<>|]/g, '-');
   const noteFolder = folder
-    ? pathMod.default.join(VAULT_PATH, folder)
-    : VAULT_PATH;
+    ? pathMod.default.join(base, folder)
+    : base;
   const { mkdir } = await import('fs/promises');
   await mkdir(noteFolder, { recursive: true });
   const notePath = pathMod.default.join(noteFolder, `${sanitizedTitle}.md`);
   const date = new Date().toISOString().split('T')[0];
   const noteContent = `# ${title}\n\nData: ${date}\n\n${content || ''}`;
   await writeFile(notePath, noteContent, 'utf-8');
-  const relativePath = notePath.replace(VAULT_PATH + '/', '');
+  const relativePath = notePath.replace(base + '/', '');
   return { success: true, path: relativePath, title };
 }
 
-async function appendObsidianNote({ path: notePath, content }) {
-  const fullPath = join(VAULT_PATH, notePath);
-  if (!fullPath.startsWith(VAULT_PATH)) throw new Error('Path inválido');
+async function appendObsidianNote({ path: notePath, content }, userId) {
+  const base = userId ? userVaultPath(userId) : VAULT_PATH;
+  const fullPath = join(base, notePath);
+  if (!fullPath.startsWith(base)) throw new Error('Path inválido');
   const existing = existsSync(fullPath) ? await readFile(fullPath, 'utf-8') : '';
   const timestamp = new Date().toLocaleString('pt-BR');
   const appended = existing + `\n\n---\n*Adicionado em ${timestamp}*\n\n${content}`;
@@ -1399,16 +1403,16 @@ async function appendObsidianNote({ path: notePath, content }) {
 // ============================================
 // EXECUTE ACTION — roteador central
 // ============================================
-async function executeAction(action) {
+async function executeAction(action, userId) {
   if (!action || !action.type) return { error: 'Action sem type definido' };
   const { type, params } = action;
   console.log(`[ACTION] Executando: ${type}`, params);
   try {
     switch (type) {
       case 'create_note':
-        return await createObsidianNote(params);
+        return await createObsidianNote(params, userId);
       case 'append_note':
-        return await appendObsidianNote(params);
+        return await appendObsidianNote(params, userId);
       case 'execute_shell':
         return await callAgent('/execute/shell', params);
       case 'git_commit': {
@@ -1445,7 +1449,7 @@ async function executeAction(action) {
 // 7p: Lista sessões salvas no Obsidian para sidebar
 app.get('/api/sessions/list', async (req, res) => {
   try {
-    const sessionsDir = join(VAULT_PATH, 'Luma/Sessoes');
+    const sessionsDir = join(userVaultPath(req.session.userId), 'Luma/Sessoes');
     const vozDir = join(sessionsDir, 'Voz');
     const sessions = [];
 
@@ -1494,7 +1498,7 @@ app.post('/api/obsidian/create', async (req, res) => {
   try {
     const { title, content, folder } = req.body;
     if (!title) return res.status(400).json({ error: 'title required' });
-    const result = await createObsidianNote({ title, content, folder });
+    const result = await createObsidianNote({ title, content, folder }, req.session.userId);
     res.json(result);
   } catch (err) {
     console.error('[OBSIDIAN CREATE]', err.message);
@@ -1506,7 +1510,7 @@ app.post('/api/obsidian/append', async (req, res) => {
   try {
     const { path, content } = req.body;
     if (!path || !content) return res.status(400).json({ error: 'path e content required' });
-    const result = await appendObsidianNote({ path, content });
+    const result = await appendObsidianNote({ path, content }, req.session.userId);
     res.json(result);
   } catch (err) {
     console.error('[OBSIDIAN APPEND]', err.message);
@@ -1535,7 +1539,7 @@ app.post('/api/actions/run', async (req, res) => {
   try {
     const { type, params } = req.body;
     if (!type) return res.status(400).json({ error: 'type required' });
-    const result = await executeAction({ type, params: params || {} });
+    const result = await executeAction({ type, params: params || {} }, req.session.userId);
     res.json(result);
   } catch (err) {
     console.error('[ACTIONS RUN]', err.message);
