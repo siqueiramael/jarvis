@@ -383,12 +383,12 @@ function extractSearchTerms(message) {
 }
 
 // Busca no vault por múltiplos termos (OR — qualquer match conta)
-async function searchNotesMulti(terms) {
+async function searchNotesMulti(terms, userId) {
   if (!terms || terms.length === 0) return [];
   const allResults = [];
   const seen = new Set();
   for (const term of terms) {
-    const results = await searchNotes(term);
+    const results = await searchNotes(term, userId);
     for (const r of results) {
       if (!seen.has(r.path)) {
         seen.add(r.path);
@@ -601,17 +601,17 @@ async function loadAgents() {
   }
 }
 
-async function searchNotes(searchTerm) {
+async function searchNotes(searchTerm, userId) {
   const results = [];
-  async function walkDir(dir) {
+  async function walkDir(dir, root) {
     const entries = await readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
       const fullPath = join(dir, entry.name);
       if (entry.isDirectory() && !entry.name.startsWith('.')) {
-        await walkDir(fullPath);
+        await walkDir(fullPath, root);
       } else if (entry.name.endsWith('.md')) {
         const content = await readFile(fullPath, 'utf-8');
-        const relativePath = fullPath.replace(VAULT_PATH + '/', '');
+        const relativePath = fullPath.replace(root + '/', '');
         if (content.toLowerCase().includes(searchTerm.toLowerCase())) {
           const titleMatch = content.match(/^#\s+(.+)$/m);
           const title = titleMatch ? titleMatch[1] : entry.name.replace('.md', '');
@@ -623,14 +623,20 @@ async function searchNotes(searchTerm) {
       }
     }
   }
-  await walkDir(VAULT_PATH);
+  const roots = userId ? [userVaultPath(userId), VAULT_PATH] : [VAULT_PATH];
+  for (const root of roots) {
+    if (existsSync(root)) await walkDir(root, root);
+  }
   return results;
 }
 
-async function readNote(notePath) {
-  const fullPath = join(VAULT_PATH, notePath);
-  if (!existsSync(fullPath) || !fullPath.startsWith(VAULT_PATH)) return null;
-  return await readFile(fullPath, 'utf-8');
+async function readNote(notePath, userId) {
+  const roots = userId ? [userVaultPath(userId), VAULT_PATH] : [VAULT_PATH];
+  for (const base of roots) {
+    const fullPath = join(base, notePath);
+    if (existsSync(fullPath) && fullPath.startsWith(base)) return await readFile(fullPath, 'utf-8');
+  }
+  return null;
 }
 
 // ============================================
@@ -753,7 +759,7 @@ app.get('/api/obsidian/search', async (req, res) => {
   const { q } = req.query;
   if (!q || q.length < 2) return res.json({ results: [] });
   try {
-    const results = await searchNotes(q);
+    const results = await searchNotes(q, req.session.userId);
     res.json({ results, query: q, count: results.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -764,7 +770,7 @@ app.get('/api/obsidian/note', async (req, res) => {
   const { path } = req.query;
   if (!path) return res.status(400).json({ error: 'path required' });
   try {
-    const content = await readNote(path);
+    const content = await readNote(path, req.session.userId);
     if (!content) return res.status(404).json({ error: 'Note not found' });
     res.json({ path, content });
   } catch (err) {
@@ -888,7 +894,7 @@ app.post('/api/chat', async (req, res) => {
   if (ragActive || autoRAG) {
     const ragTerms = ragActive ? [searchQuery] : extractSearchTerms(cleanMessage);
     try {
-      const results = ragActive ? await searchNotes(ragTerms[0]) : await searchNotesMulti(ragTerms);
+      const results = ragActive ? await searchNotes(ragTerms[0], req.session.userId) : await searchNotesMulti(ragTerms, req.session.userId);
       if (results.length > 0) {
         const context = results.slice(0, 3).map(r => `[${r.title}]: ${r.snippet}`).join('\n\n');
         messages.push({ role: 'system', content: `Contexto do Obsidian Vault:\n\n${context}` });
@@ -1158,7 +1164,7 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     if (voiceRagActive || voiceAutoRAG) {
       const ragTerms = voiceRagActive ? [searchQuery] : extractSearchTerms(userText);
       try {
-        const results = voiceRagActive ? await searchNotes(ragTerms[0]) : await searchNotesMulti(ragTerms);
+        const results = voiceRagActive ? await searchNotes(ragTerms[0], req.session.userId) : await searchNotesMulti(ragTerms, req.session.userId);
         if (results.length > 0) {
           const context = results.slice(0, 3).map(r => `[${r.title}]: ${r.snippet}`).join('\n\n');
           messages.push({ role: 'system', content: `Contexto do Obsidian Vault:\n\n${context}` });
