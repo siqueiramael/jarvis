@@ -796,7 +796,8 @@ app.get('/api/agents/detect', (req, res) => {
 });
 
 app.post('/api/chat', async (req, res) => {
-  const { message, useRAG = false, searchQuery, sessionId = 'default' } = req.body;
+  const { message, useRAG = false, searchQuery } = req.body;
+  const sessionId = req.session.userId; // S4: sessao isolada por usuario
   if (!message) return res.status(400).json({ error: 'Message required' });
 
   // Sessao: pega ou cria
@@ -1114,8 +1115,7 @@ app.post('/api/voice/pipeline', upload.single('audio'), async (req, res) => {
     const searchQuery = req.body.searchQuery || '';
 
     // 7l-B: Sessão de voz — init ou recupera
-    const rawSid = req.body.sessionId;
-    const voiceSessionId = Array.isArray(rawSid) ? rawSid[0] : (rawSid || 'default');
+    const voiceSessionId = req.session.userId; // S4: voz unificada/isolada por usuario
     if (!sessionStore.has(voiceSessionId)) {
       sessionStore.set(voiceSessionId, { messages: [], specialistHistory: [], lastActivity: Date.now(), agentId: 'voice' });
     }
@@ -1515,7 +1515,7 @@ app.post('/api/obsidian/append', async (req, res) => {
 });
 
 app.post('/api/session/end', async (req, res) => {
-  const { sessionId = 'default' } = req.body;
+  const sessionId = req.session.userId; // S4: sessao isolada por usuario
   try {
     const session = sessionStore.get(sessionId);
     const turns = session ? Math.floor(session.messages.length / 2) : 0;
