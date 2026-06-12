@@ -827,18 +827,15 @@ function extractSearchTerms(message) {
 // Busca no vault por múltiplos termos (OR — qualquer match conta)
 async function searchNotesMulti(terms, userId) {
   if (!terms || terms.length === 0) return [];
-  const allResults = [];
-  const seen = new Set();
+  const byPath = new Map();
   for (const term of terms) {
     const results = await searchNotes(term, userId);
     for (const r of results) {
-      if (!seen.has(r.path)) {
-        seen.add(r.path);
-        allResults.push(r);
-      }
+      if (byPath.has(r.path)) { byPath.get(r.path).score++; }
+      else { byPath.set(r.path, Object.assign({}, r, { score: 1 })); }
     }
   }
-  return allResults;
+  return Array.from(byPath.values()).sort((a, b) => b.score - a.score);
 }
 
 // 7o-D: Memória persistente entre sessões
@@ -1349,8 +1346,15 @@ app.post('/api/chat', async (req, res) => {
     try {
       const results = ragActive ? await searchNotes(ragTerms[0], req.session.userId) : await searchNotesMulti(ragTerms, req.session.userId);
       if (results.length > 0) {
-        const context = results.slice(0, 3).map(r => `[${r.title}]: ${r.snippet}`).join('\n\n');
-        messages.push({ role: 'system', content: `Contexto do Obsidian Vault:\n\n${context}` });
+        const top = results.slice(0, 3);
+        const parts = [];
+        for (const r of top) {
+          let full = r.snippet;
+          try { const c = await readNote(r.path, req.session.userId); if (c) full = c; } catch (e) {}
+          parts.push('### ' + r.title + '\n' + String(full).slice(0, 2000));
+        }
+        const context = parts.join('\n\n');
+        messages.push({ role: 'system', content: 'Conteudo recuperado dos documentos do proprio usuario (fonte da verdade). Sua tarefa: LER e TRANSCREVER o que esta escrito abaixo. Distincao critica: reproduzir o que um profissional JA escreveu e permitido e esperado; isso NAO e prescrever nem aconselhar. Quando perguntarem como administrar algo (frequencia, dose, duracao, posologia) e estiver escrito no documento, reproduza o trecho EXATO - voce esta lendo a receita de volta, nao criando uma. Pode acrescentar uma nota para seguir a orientacao do profissional responsavel, mas NUNCA recuse a ler o que ja esta escrito (vale para saude, juridico, financeiro). Exemplo: o documento diz De 1 comprimido a cada 12 horas por 10 dias e perguntam de quanto em quanto tempo -> a resposta correta e Segundo o documento: 1 comprimido a cada 12 horas, por 10 dias, e NAO uma recusa do tipo nao posso informar.\n\n' + context });
         if (autoRAG) {
           ragUsedAuto = true;
           console.log(`[RAG] Auto-RAG ativado: [${ragTerms.join(", ")}] → ${results.length} resultado(s)`);
