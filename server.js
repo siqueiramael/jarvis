@@ -7,6 +7,9 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import dotenv from 'dotenv';
 import multer from 'multer';
+import session from 'express-session';
+import FileStoreFactory from 'session-file-store';
+import bcrypt from 'bcryptjs';
 
 dotenv.config();
 
@@ -20,6 +23,66 @@ const upload = multer({ dest: '/tmp/' });
 
 app.use(express.json());
 app.use(express.static(join(__dirname, 'public')));
+
+// ============================================
+// AUTH — sessao + login (patch S1; NAO tranca o app ainda)
+// ============================================
+const FileStore = FileStoreFactory(session);
+const USERS_PATH = join(__dirname, 'data/users.json');
+const SESSIONS_PATH = join(__dirname, 'data/sessions');
+
+app.set('trust proxy', 1); // nginx termina o TLS; necessario pro cookie Secure
+
+app.use(session({
+  store: new FileStore({ path: SESSIONS_PATH, retries: 1, ttl: 60 * 60 * 24 * 30, reapInterval: 60 * 60 }),
+  secret: process.env.SESSION_SECRET || 'CHANGE_ME_dev_only',
+  resave: false,
+  saveUninitialized: false,
+  rolling: true,
+  cookie: { httpOnly: true, secure: true, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 24 * 30 },
+}));
+
+function loadUsers() {
+  try {
+    if (!existsSync(USERS_PATH)) return [];
+    return JSON.parse(readFileSync(USERS_PATH, 'utf-8'));
+  } catch (e) {
+    console.error('[AUTH] erro lendo users.json:', e.message);
+    return [];
+  }
+}
+function findUserByUsername(username) {
+  return loadUsers().find(u => u.username === username && u.active !== false);
+}
+
+app.post('/api/login', async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+    if (!username || !password) return res.status(400).json({ error: 'username e senha obrigatorios' });
+    const user = findUserByUsername(username);
+    if (!user) return res.status(401).json({ error: 'credenciais invalidas' });
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) return res.status(401).json({ error: 'credenciais invalidas' });
+    req.session.userId = user.id;
+    req.session.role = user.role;
+    res.json({ ok: true, user: { id: user.id, username: user.username, role: user.role, profile: user.profile || {} } });
+  } catch (e) {
+    console.error('[AUTH] login erro:', e.message);
+    res.status(500).json({ error: 'erro interno' });
+  }
+});
+
+app.post('/api/logout', (req, res) => {
+  req.session.destroy(() => res.json({ ok: true }));
+});
+
+app.get('/api/me', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'nao autenticado' });
+  const user = loadUsers().find(u => u.id === req.session.userId);
+  if (!user) return res.status(401).json({ error: 'sessao invalida' });
+  res.json({ id: user.id, username: user.username, role: user.role, profile: user.profile || {} });
+});
+
 
 let currentAgent = null;
 let agentsList = [];
