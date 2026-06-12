@@ -66,7 +66,16 @@ function isPublic(p) {
 }
 
 app.use((req, res, next) => {
-  if (isPublic(req.path) || (req.session && req.session.userId)) return next();
+  if (isPublic(req.path)) return next();
+  if (req.session && req.session.userId) {
+    if (req.path.startsWith('/api/')) {
+      const u = loadUsersCached().find(x => x.id === req.session.userId);
+      if (!u || u.active === false) {
+        return req.session.destroy(() => res.status(401).json({ error: 'sessao encerrada' }));
+      }
+    }
+    return next();
+  }
   if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'nao autenticado' });
   return res.redirect('/login');
 });
@@ -124,7 +133,13 @@ function loadInvites() {
   } catch (e) { console.error('[INVITE] erro lendo invites.json:', e.message); return []; }
 }
 function saveInvites(list) { writeFileSync(INVITES_PATH, JSON.stringify(list, null, 2), 'utf-8'); }
-function saveUsers(list) { writeFileSync(USERS_PATH, JSON.stringify(list, null, 2), 'utf-8'); }
+let _usersCache = null, _usersCacheAt = 0;
+function loadUsersCached() {
+  const now = Date.now();
+  if (!_usersCache || now - _usersCacheAt > 5000) { _usersCache = loadUsers(); _usersCacheAt = now; }
+  return _usersCache;
+}
+function saveUsers(list) { writeFileSync(USERS_PATH, JSON.stringify(list, null, 2), 'utf-8'); _usersCache = null; }
 function isStrongPassword(pw) {
   return typeof pw === 'string' && pw.length >= 8 && /[A-Z]/.test(pw) && /[0-9]/.test(pw) && /[^A-Za-z0-9]/.test(pw);
 }
@@ -269,8 +284,10 @@ app.post('/api/register', registerLimiter, async (req, res) => {
 
 app.get('/api/me', (req, res) => {
   if (!req.session || !req.session.userId) return res.status(401).json({ error: 'nao autenticado' });
-  const user = loadUsers().find(u => u.id === req.session.userId);
-  if (!user) return res.status(401).json({ error: 'sessao invalida' });
+  const user = loadUsersCached().find(u => u.id === req.session.userId);
+  if (!user || user.active === false) {
+    return req.session.destroy(() => res.status(401).json({ error: 'sessao encerrada' }));
+  }
   res.json({ id: user.id, username: user.username, role: user.role, profile: user.profile || {} });
 });
 
